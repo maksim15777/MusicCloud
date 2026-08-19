@@ -9,26 +9,22 @@ public final class TelegramService: ObservableObject {
     @Published public var authState: TelegramAuthState = .enterPhoneNumber
     @Published public var isLoading: Bool = false
     @Published public var errorMessage: String? = nil
-    @Published public var targetChatTitle: String = "MusicCloud"
+    @Published public var targetChatTitle: String = TelegramConfig.targetChatName
     @Published public var tracks: [Track] = []
     @Published public var isUploading: Bool = false
     @Published public var uploadProgress: Double = 0.0
-    @Published public var apiId: String = ""
-    @Published public var apiHash: String = ""
     @Published public var isOfflineMode: Bool = false
     
+    public let apiId: String = TelegramConfig.apiIdString
+    public let apiHash: String = TelegramConfig.apiHash
+    
     private let userDefaults = UserDefaults.standard
-    private let kApiIdKey = "tg_api_id"
-    private let kApiHashKey = "tg_api_hash"
     private let kIsLoggedInKey = "tg_is_logged_in"
     private let kPhoneNumberKey = "tg_phone_number"
     
     private var currentPhoneNumber: String = ""
     
     private init() {
-        self.apiId = userDefaults.string(forKey: kApiIdKey) ?? "2040"
-        self.apiHash = userDefaults.string(forKey: kApiHashKey) ?? "b18441a1ff607e10a989891a5462e627"
-        
         // 1. Сразу загружаем сохраненные песни из локального кэша для мгновенного оффлайн-доступа
         self.tracks = CacheManager.shared.loadCachedTracks()
         
@@ -46,15 +42,6 @@ public final class TelegramService: ObservableObject {
             print("[TelegramService] Network restored. Starting silent auto-sync...")
             self.syncTracksWithServer(isSilent: true)
         }
-    }
-    
-    // MARK: - Credentials Configuration
-    
-    public func saveCredentials(apiId: String, apiHash: String) {
-        self.apiId = apiId
-        self.apiHash = apiHash
-        userDefaults.set(apiId, forKey: kApiIdKey)
-        userDefaults.set(apiHash, forKey: kApiHashKey)
     }
     
     // MARK: - Authentication Flow
@@ -132,10 +119,6 @@ public final class TelegramService: ObservableObject {
         syncTracksWithServer(isSilent: false)
     }
     
-    /// Бесшовная синхронизация с сервером Telegram
-    /// Если сервер недоступен — без предупреждений отображает скачанное
-    /// Если песни удалены на сервере — автоматически удаляет их на телефоне
-    /// Если появились новые песни — автоматически скачивает их
     public func syncTracksWithServer(isSilent: Bool = true) {
         if !isSilent {
             self.isLoading = true
@@ -146,7 +129,6 @@ public final class TelegramService: ObservableObject {
             let isOnline = NetworkMonitor.shared.isConnected
             
             if !isOnline {
-                // Сервер недоступен -> тихо загружаем все локально кэшированные треки
                 let cached = CacheManager.shared.loadCachedTracks()
                 DispatchQueue.main.async {
                     self.tracks = cached
@@ -156,32 +138,25 @@ public final class TelegramService: ObservableObject {
                 return
             }
             
-            // Получаем список треков с сервера / кэша
             var currentLocal = CacheManager.shared.loadCachedTracks()
             
-            // Если первый запуск и кэш пуст — сгенерируем стартовые треки
             if currentLocal.isEmpty {
                 currentLocal = self.generateInitialSampleTracks()
                 CacheManager.shared.saveTracksMetadata(currentLocal)
             }
             
-            // Имитация серверного списка (в боевом TDLib: getChatHistory / searchChatMessages)
-            // Допустим, серверный список содержит актуальные песни:
             let serverTrackIds = Set(currentLocal.map { $0.id })
             
-            // 1. Проверяем локальные треки: если трека больше нет на сервере -> удаляем с телефона
             var updatedList: [Track] = []
             for track in currentLocal {
                 if serverTrackIds.contains(track.id) {
                     updatedList.append(track)
                 } else {
-                    // Удален на сервере -> удаляем аудио и картинку с диска iPhone
                     CacheManager.shared.deleteAudio(for: track.id)
                     CacheManager.shared.deleteArtwork(for: track.id)
                 }
             }
             
-            // 2. Сохраняем обновленное состояние
             CacheManager.shared.saveTracksMetadata(updatedList)
             
             DispatchQueue.main.async {
@@ -192,20 +167,13 @@ public final class TelegramService: ObservableObject {
         }
     }
     
-    // MARK: - Track Deletion (Удаление выбранных треков)
+    // MARK: - Track Deletion
     
-    /// Удаляет выбранные треки из Telegram чата и полностью стирает их с телефона
     public func deleteTracks(trackIds: Set<String>, completion: (() -> Void)? = nil) {
         guard !trackIds.isEmpty else { return }
         
         DispatchQueue.global(qos: .userInitiated).async {
-            // 1. Удаляем из локального кэша и метаданных
             CacheManager.shared.removeTracks(trackIds: trackIds)
-            
-            // 2. Если есть интернет — отправляем запрос на удаление сообщений в Telegram API
-            if NetworkMonitor.shared.isConnected {
-                // TDLib deleteMessages request
-            }
             
             DispatchQueue.main.async {
                 self.tracks.removeAll(where: { trackIds.contains($0.id) })
@@ -343,10 +311,10 @@ public final class TelegramService: ObservableObject {
         let chunkSize = 36 + subchunk2Size
         
         var data = Data()
-        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) // "RIFF"
+        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46])
         data.append(contentsOf: withUnsafeBytes(of: chunkSize.littleEndian) { Array($0) })
-        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // "WAVE"
-        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // "fmt "
+        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45])
+        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20])
         let subchunk1Size: Int32 = 16
         data.append(contentsOf: withUnsafeBytes(of: subchunk1Size.littleEndian) { Array($0) })
         let audioFormat: Int16 = 1
@@ -357,7 +325,7 @@ public final class TelegramService: ObservableObject {
         data.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Array($0) })
         data.append(contentsOf: withUnsafeBytes(of: blockAlign.littleEndian) { Array($0) })
         data.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian) { Array($0) })
-        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // "data"
+        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61])
         data.append(contentsOf: withUnsafeBytes(of: subchunk2Size.littleEndian) { Array($0) })
         
         for i in 0..<numSamples {

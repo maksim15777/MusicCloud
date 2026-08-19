@@ -6,9 +6,6 @@ public struct AuthView: View {
     @State private var phoneNumber: String = ""
     @State private var authCode: String = ""
     @State private var password2FA: String = ""
-    @State private var showApiSettings: Bool = false
-    @State private var customApiId: String = ""
-    @State private var customApiHash: String = ""
     
     public var body: some View {
         ZStack {
@@ -74,25 +71,7 @@ public struct AuthView: View {
                 .padding(.horizontal, 20)
                 
                 Spacer()
-                
-                // API Credentials toggle button
-                Button(action: {
-                    customApiId = telegramService.apiId
-                    customApiHash = telegramService.apiHash
-                    showApiSettings.toggle()
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "gearshape")
-                        Text("Настройки Telegram API")
-                    }
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Color(white: 0.45))
-                    .padding(.bottom, 20)
-                }
             }
-        }
-        .sheet(isPresented: $showApiSettings) {
-            apiSettingsSheet
         }
     }
     
@@ -285,61 +264,5 @@ public struct AuthView: View {
                 .foregroundColor(Color(white: 0.8))
         }
         .padding(.vertical, 20)
-    }
-    
-    // MARK: - API Settings Sheet
-    
-    private var apiSettingsSheet: some View {
-        NavigationView {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("Telegram API Credentials")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Text("Вы можете указать свои api_id и api_hash с сайта my.telegram.org:")
-                        .font(.system(size: 14))
-                        .foregroundColor(Color(white: 0.6))
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("API_ID")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Color(white: 0.45))
-                        TextField("2040", text: $customApiId)
-                            .padding(12)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.12)))
-                            .foregroundColor(.white)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("API_HASH")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Color(white: 0.45))
-                        TextField("b18441a1ff607e10a989891a5462e627", text: $customApiHash)
-                            .padding(12)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.12)))
-                            .foregroundColor(.white)
-                    }
-                    
-                    Spacer()
-                    
-                    Button(action: {
-                        telegramService.saveCredentials(apiId: customApiId, apiHash: customApiHash)
-                        showApiSettings = false
-                    }) {
-                        Text("Сохранить")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                            .background(RoundedRectangle(cornerRadius: 14).fill(Color.white))
-                    }
-                }
-                .padding(20)
-            }
-            .navigationBarHidden(true)
-        }
     }
 }
