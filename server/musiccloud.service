@@ -1,0 +1,15 @@
+[Unit]
+Description=MusicCloud Telegram MTProto Backend Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/MusicCloud/server
+ExecStart=/root/MusicCloud/server/venv/bin/python3 /root/MusicCloud/server/main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
