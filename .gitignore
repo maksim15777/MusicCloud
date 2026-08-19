@@ -1,0 +1,13 @@
+# Xcode & Swift
+.DS_Store
+*/build/
+build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+*.ipa
+Payload/
+.idea/
+.vscode/
+.gitlocal/
