@@ -10,7 +10,8 @@ from telethon.errors import (
     SessionPasswordNeededError,
     PhoneCodeInvalidError,
     PasswordHashInvalidError,
-    PhoneNumberInvalidError
+    PhoneNumberInvalidError,
+    FloodWaitError
 )
 from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeFilename
 
@@ -32,7 +33,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
+# Инициализация клиента с официальным профилем iOS для надежной доставки кодов
+client = TelegramClient(
+    SESSION_FILE,
+    API_ID,
+    API_HASH,
+    device_model="iPhone 14 Pro",
+    system_version="iOS 16.5",
+    app_version="10.2.1",
+    lang_code="ru",
+    system_lang_code="ru"
+)
 pending_auth = {}
 
 @app.on_event("startup")
@@ -60,57 +71,94 @@ class Password2FARequest(BaseModel):
 class DeleteTracksRequest(BaseModel):
     message_ids: List[int]
 
+def clean_phone_number(raw_phone: str) -> str:
+    cleaned = raw_phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if not cleaned.startswith("+"):
+        cleaned = "+" + cleaned
+    return cleaned
+
 @app.get("/auth/status")
 async def get_auth_status():
+    if not client.is_connected():
+        await client.connect()
     return {"authorized": await client.is_user_authorized()}
 
 @app.post("/auth/send-code")
 async def send_code(req: SendCodeRequest):
-    phone = req.phone.strip()
+    phone = clean_phone_number(req.phone)
     try:
-        result = await client.send_code_request(phone)
+        if not client.is_connected():
+            await client.connect()
+        
+        result = await client.send_code_request(phone, force_sms=False)
         pending_auth[phone] = result.phone_code_hash
+        print(f"[MusicCloud] Code successfully sent to Telegram app for {phone}")
         return {"status": "code_sent", "phone": phone}
     except PhoneNumberInvalidError:
-        raise HTTPException(status_code=400, detail="Неверный номер телефона")
+        raise HTTPException(status_code=400, detail="Неверный номер телефона. Укажите номер с кодом страны (например +380... или +7...)")
+    except FloodWaitError as e:
+        raise HTTPException(status_code=429, detail=f"Слишком много попыток. Подождите {e.seconds} секунд")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        err_str = str(e)
+        print(f"[send_code error]: {err_str}")
+        if "all available options" in err_str.lower():
+            err_str = "Telegram не смог отправить код. Убедитесь, что у вас открыто приложение Telegram (код приходит прямо в чат Telegram) и номер начинается с '+' и кода страны."
+        raise HTTPException(status_code=400, detail=err_str)
 
 @app.post("/auth/sign-in")
 async def sign_in(req: SignInRequest):
-    phone = req.phone.strip()
-    code = req.code.strip()
+    phone = clean_phone_number(req.phone)
+    code = req.code.strip().replace(" ", "").replace("-", "")
     phone_code_hash = pending_auth.get(phone)
+    
     try:
+        if not client.is_connected():
+            await client.connect()
+            
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+        print(f"[MusicCloud] User {phone} successfully authenticated!")
         return {"status": "authenticated"}
     except SessionPasswordNeededError:
         return {"status": "2fa_required"}
     except PhoneCodeInvalidError:
         raise HTTPException(status_code=400, detail="Неверный код подтверждения")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[sign_in error]: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/auth/2fa")
 async def sign_in_2fa(req: Password2FARequest):
     try:
+        if not client.is_connected():
+            await client.connect()
+            
         await client.sign_in(password=req.password)
+        print("[MusicCloud] 2FA password accepted, logged in!")
         return {"status": "authenticated"}
     except PasswordHashInvalidError:
-        raise HTTPException(status_code=400, detail="Неверный пароль 2FA")
+        raise HTTPException(status_code=400, detail="Неверный пароль двухфакторной аутентификации")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[2fa error]: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 # ==========================================
 # Chat & Audio Endpoints
 # ==========================================
 async def get_target_chat():
+    if not client.is_connected():
+        await client.connect()
+        
     if not await client.is_user_authorized():
         raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
+        
     async for dialog in client.iter_dialogs():
         if dialog.name == TARGET_CHAT or dialog.title == TARGET_CHAT:
             return dialog.entity
-    raise HTTPException(status_code=404, detail=f"Чат/канал '{TARGET_CHAT}' не найден. Создайте его в Telegram.")
+            
+    raise HTTPException(
+        status_code=404, 
+        detail=f"Чат/канал '{TARGET_CHAT}' не найден. Создайте чат или группу с названием '{TARGET_CHAT}' в Telegram."
+    )
 
 @app.get("/tracks")
 async def list_tracks():
