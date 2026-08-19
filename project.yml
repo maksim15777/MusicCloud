@@ -1,7 +1,7 @@
 name: TGMusicPlayer
 options:
   bundleIdPrefix: com.tgplayer
-  xcodeVersion: "15.0"
+  xcodeVersion: "16.0"
   deploymentTarget:
     iOS: "16.0"
 
