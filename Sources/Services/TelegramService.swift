@@ -366,7 +366,13 @@ public final class TelegramService: ObservableObject {
     
     // MARK: - Upload Audio File via Backend Proxy
     
-    public func uploadAudioFile(from sourceURL: URL, completion: @escaping (Result<Track, Error>) -> Void) {
+    public func uploadAudioFile(
+        from sourceURL: URL,
+        title customTitle: String? = nil,
+        performer customPerformer: String? = nil,
+        customArtwork: UIImage? = nil,
+        completion: @escaping (Result<Track, Error>) -> Void
+    ) {
         self.isUploading = true
         self.uploadProgress = 0.1
         
@@ -377,13 +383,15 @@ public final class TelegramService: ObservableObject {
         }
         
         let asset = AVURLAsset(url: sourceURL)
-        var title = sourceURL.deletingPathExtension().lastPathComponent
-        var performer = "Неизвестный исполнитель"
+        var title = customTitle ?? sourceURL.deletingPathExtension().lastPathComponent
+        var performer = customPerformer ?? "Неизвестный исполнитель"
         
-        for item in asset.metadata {
-            if let key = item.commonKey?.rawValue {
-                if key == "title", let val = item.stringValue, !val.isEmpty { title = val }
-                if key == "artist", let val = item.stringValue, !val.isEmpty { performer = val }
+        if customTitle == nil || customPerformer == nil {
+            for item in asset.metadata {
+                if let key = item.commonKey?.rawValue {
+                    if key == "title", let val = item.stringValue, !val.isEmpty, customTitle == nil { title = val }
+                    if key == "artist", let val = item.stringValue, !val.isEmpty, customPerformer == nil { performer = val }
+                }
             }
         }
         
@@ -442,7 +450,10 @@ public final class TelegramService: ObservableObject {
                 let fn = json["file_name"] as? String ?? sourceURL.lastPathComponent
                 
                 let cachedURL = CacheManager.shared.saveAudio(data: audioData, for: id)
-                if let cachedURL = cachedURL {
+                
+                if let customArtwork = customArtwork, let artData = customArtwork.jpegData(compressionQuality: 0.85) {
+                    _ = CacheManager.shared.saveArtwork(data: artData, for: id)
+                } else if let cachedURL = cachedURL {
                     _ = CacheManager.shared.extractAndSaveArtwork(from: cachedURL, for: id)
                 }
                 

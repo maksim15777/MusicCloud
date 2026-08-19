@@ -9,6 +9,10 @@ public struct ContentView: View {
     
     @State private var isShowingFullPlayer: Bool = false
     @State private var isShowingDocumentPicker: Bool = false
+    @State private var selectedAudioForUpload: URL? = nil
+    @State private var isShowingUploadMetadataSheet: Bool = false
+    @State private var isSideMenuOpen: Bool = false
+    
     @State private var searchText: String = ""
     @FocusState private var isSearchFocused: Bool
     
@@ -28,6 +32,15 @@ public struct ContentView: View {
             } else {
                 mainMusicCloudView
                     .transition(.opacity)
+                
+                // Боковое меню (Side Drawer)
+                SideMenuView(
+                    isOpen: $isSideMenuOpen,
+                    telegramService: telegramService,
+                    onAddTrack: {
+                        isShowingDocumentPicker = true
+                    }
+                )
             }
         }
         .animation(.easeInOut(duration: 0.3), value: telegramService.authState)
@@ -38,12 +51,27 @@ public struct ContentView: View {
             DocumentPicker(
                 onFilePicked: { fileURL in
                     isShowingDocumentPicker = false
-                    uploadPickedAudio(fileURL: fileURL)
+                    selectedAudioForUpload = fileURL
+                    isShowingUploadMetadataSheet = true
                 },
                 onCancel: {
                     isShowingDocumentPicker = false
                 }
             )
+        }
+        .sheet(isPresented: $isShowingUploadMetadataSheet) {
+            if let fileURL = selectedAudioForUpload {
+                UploadTrackSheet(
+                    sourceFileURL: fileURL,
+                    onUpload: { url, title, performer, artwork in
+                        isShowingUploadMetadataSheet = false
+                        uploadPickedAudio(fileURL: url, title: title, performer: performer, artwork: artwork)
+                    },
+                    onCancel: {
+                        isShowingUploadMetadataSheet = false
+                    }
+                )
+            }
         }
         .onAppear {
             if telegramService.authState == .authenticated {
@@ -52,7 +80,6 @@ public struct ContentView: View {
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active && telegramService.authState == .authenticated {
-                // Автоматическое обновление при возвращении в приложение
                 telegramService.syncTracksWithServer(isSilent: true)
             }
         }
@@ -79,7 +106,7 @@ public struct ContentView: View {
                 }
             }
             
-            // Bottom Bar (Upload button / Mini player OR Delete action bar)
+            // Bottom Bar (Mini player OR Delete action bar)
             if isEditMode {
                 editModeBottomBar
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -91,7 +118,7 @@ public struct ContentView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isEditMode)
     }
     
-    // MARK: - Normal Header Bar (Без лишней кнопки обновления)
+    // MARK: - Normal Header Bar (С кнопкой меню "три полоски" вверху справа)
     
     private var normalHeaderBar: some View {
         VStack(spacing: 12) {
@@ -114,11 +141,31 @@ public struct ContentView: View {
                 
                 Spacer()
                 
-                if telegramService.isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(0.8)
+                // Кнопка меню "три полоски" вверху справа
+                Button(action: {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        isSideMenuOpen = true
+                    }
+                }) {
+                    ZStack {
+                        Circle()
+                            .fill(Color(white: 0.12))
+                            .frame(width: 42, height: 42)
+                        
+                        VStack(spacing: 3.5) {
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(Color.white)
+                                .frame(width: 18, height: 2)
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(Color.white)
+                                .frame(width: 18, height: 2)
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(Color.white)
+                                .frame(width: 18, height: 2)
+                        }
+                    }
                 }
+                .buttonStyle(ScaleButtonStyle())
             }
             .padding(.horizontal, 20)
             .padding(.top, 14)
@@ -143,7 +190,6 @@ public struct ContentView: View {
                     }
                 }
                 
-                // Кнопка-стрелочка для скрытия клавиатуры
                 if isSearchFocused {
                     Button(action: {
                         isSearchFocused = false
@@ -261,10 +307,9 @@ public struct ContentView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
-            .padding(.bottom, playerManager.currentTrack != nil ? 130 : 90)
+            .padding(.bottom, playerManager.currentTrack != nil ? 110 : 40)
         }
         .refreshable {
-            // Свайп сверху вниз для обновления
             await telegramService.fetchMusicCloudTracksAsync()
         }
     }
@@ -289,7 +334,7 @@ public struct ContentView: View {
                 .font(.system(size: 20, weight: .bold))
                 .foregroundColor(.white)
             
-            Text("Потяните вниз для обновления\nили нажмите на три полоски внизу слева")
+            Text("Потяните вниз для обновления\nили добавьте трек через меню сверху справа")
                 .font(.system(size: 14))
                 .foregroundColor(Color(white: 0.5))
                 .multilineTextAlignment(.center)
@@ -300,7 +345,7 @@ public struct ContentView: View {
             }) {
                 HStack(spacing: 8) {
                     Image(systemName: "plus")
-                    Text("Выбрать музыку")
+                    Text("Добавить трек")
                 }
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(.black)
@@ -315,7 +360,7 @@ public struct ContentView: View {
         .padding(.horizontal, 30)
     }
     
-    // MARK: - Normal Bottom Bar Overlay (Три полоски + Mini Player)
+    // MARK: - Normal Bottom Bar Overlay (Чистый Mini Player)
     
     private var normalBottomBarOverlay: some View {
         VStack(spacing: 8) {
@@ -325,7 +370,7 @@ public struct ContentView: View {
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(0.8)
                     
-                    Text("Отправка трека в MusicCloud...")
+                    Text("Загрузка трека в MusicCloud...")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white)
                 }
@@ -335,45 +380,13 @@ public struct ContentView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             
-            HStack(alignment: .bottom, spacing: 10) {
-                // Кнопка "три полоски" внизу слева
-                Button(action: {
-                    isShowingDocumentPicker = true
-                }) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 18)
-                            .fill(Color(white: 0.14))
-                            .frame(width: 52, height: 52)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                            )
-                            .shadow(color: Color.black.opacity(0.4), radius: 8, x: 0, y: 4)
-                        
-                        VStack(spacing: 4) {
-                            RoundedRectangle(cornerRadius: 1.5)
-                                .fill(Color.white)
-                                .frame(width: 20, height: 2.5)
-                            RoundedRectangle(cornerRadius: 1.5)
-                                .fill(Color.white)
-                                .frame(width: 14, height: 2.5)
-                            RoundedRectangle(cornerRadius: 1.5)
-                                .fill(Color.white)
-                                .frame(width: 18, height: 2.5)
-                        }
-                    }
+            if playerManager.currentTrack != nil {
+                MiniPlayerView(playerManager: playerManager) {
+                    isShowingFullPlayer = true
                 }
-                .buttonStyle(ScaleButtonStyle())
-                
-                // Mini Player
-                if playerManager.currentTrack != nil {
-                    MiniPlayerView(playerManager: playerManager) {
-                        isShowingFullPlayer = true
-                    }
-                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
         }
         .background(
             LinearGradient(
@@ -456,8 +469,13 @@ public struct ContentView: View {
         telegramService.deleteTracks(trackIds: toDelete)
     }
     
-    private func uploadPickedAudio(fileURL: URL) {
-        telegramService.uploadAudioFile(from: fileURL) { result in
+    private func uploadPickedAudio(fileURL: URL, title: String, performer: String, artwork: UIImage?) {
+        telegramService.uploadAudioFile(
+            from: fileURL,
+            title: title.isEmpty ? nil : title,
+            performer: performer.isEmpty ? nil : performer,
+            customArtwork: artwork
+        ) { result in
             switch result {
             case .success(let newTrack):
                 withAnimation {
