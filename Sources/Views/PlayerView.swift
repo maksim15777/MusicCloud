@@ -45,7 +45,6 @@ public struct PlayerView: View {
                     
                     Spacer()
                     
-                    // Empty placeholder to balance header
                     Color.clear.frame(width: 44, height: 44)
                 }
                 .padding(.horizontal, 20)
@@ -53,7 +52,7 @@ public struct PlayerView: View {
                 
                 Spacer(minLength: 10)
                 
-                // Big Album Artwork Card
+                // Big Album Artwork Card (с настоящей обложкой из трека)
                 ZStack {
                     RoundedRectangle(cornerRadius: 28)
                         .fill(
@@ -64,32 +63,31 @@ public struct PlayerView: View {
                             )
                         )
                         .frame(width: 280, height: 280)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 28)
-                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                        )
-                        .shadow(color: Color.black.opacity(0.6), radius: 24, x: 0, y: 14)
                     
-                    VStack(spacing: 16) {
+                    if let track = playerManager.currentTrack,
+                       let artwork = CacheManager.shared.cachedArtwork(for: track.id) {
+                        Image(uiImage: artwork)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 280, height: 280)
+                            .clipShape(RoundedRectangle(cornerRadius: 28))
+                    } else {
                         Image(systemName: "music.note")
                             .font(.system(size: 80, weight: .light))
                             .foregroundColor(Color.white.opacity(0.75))
-                        
-                        if let track = playerManager.currentTrack {
-                            Text(track.telegramCaptionBadge)
-                                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                .foregroundColor(Color(white: 0.45))
-                                .padding(.horizontal, 16)
-                                .lineLimit(1)
-                        }
                     }
                 }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 28)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.6), radius: 24, x: 0, y: 14)
                 .scaleEffect(playerManager.isPlaying ? 1.02 : 0.94)
                 .animation(.spring(response: 0.45, dampingFraction: 0.7), value: playerManager.isPlaying)
                 
                 Spacer(minLength: 10)
                 
-                // Track Info
+                // Track Info (Название и исполнитель)
                 if let track = playerManager.currentTrack {
                     VStack(spacing: 6) {
                         Text(track.title)
@@ -132,21 +130,18 @@ public struct PlayerView: View {
                 
                 // Playback Controls
                 HStack(spacing: 32) {
-                    // Shuffle
                     Button(action: { playerManager.toggleShuffle() }) {
                         Image(systemName: "shuffle")
                             .font(.system(size: 20, weight: .semibold))
                             .foregroundColor(playerManager.isShuffled ? .white : Color(white: 0.35))
                     }
                     
-                    // Prev
                     Button(action: { playerManager.previous() }) {
                         Image(systemName: "backward.fill")
                             .font(.system(size: 26))
                             .foregroundColor(.white)
                     }
                     
-                    // Big Play/Pause
                     AnimatedPlayButton(
                         isPlaying: playerManager.isPlaying,
                         size: 72,
@@ -158,14 +153,12 @@ public struct PlayerView: View {
                         }
                     )
                     
-                    // Next
                     Button(action: { playerManager.next() }) {
                         Image(systemName: "forward.fill")
                             .font(.system(size: 26))
                             .foregroundColor(.white)
                     }
                     
-                    // Repeat
                     Button(action: { playerManager.toggleRepeat() }) {
                         Image(systemName: playerManager.repeatMode.iconName)
                             .font(.system(size: 20, weight: .semibold))

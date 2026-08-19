@@ -102,6 +102,20 @@ public final class CacheManager {
         try? fileManager.removeItem(at: fileURL)
     }
     
+    /// Извлекает встроенную обложку (ID3 / MP4 artwork) из самого аудиофайла
+    public func extractAndSaveArtwork(from audioURL: URL, for trackId: String) -> UIImage? {
+        let asset = AVURLAsset(url: audioURL)
+        for item in asset.metadata {
+            if let commonKey = item.commonKey, commonKey == .commonKeyArtwork, let data = item.dataValue {
+                if let image = UIImage(data: data) {
+                    _ = saveArtwork(data: data, for: trackId)
+                    return image
+                }
+            }
+        }
+        return nil
+    }
+    
     // MARK: - Metadata Cache
     
     public func saveTracksMetadata(_ tracks: [Track]) {

@@ -5,6 +5,8 @@ public struct ContentView: View {
     @StateObject private var playerManager = AudioPlayerManager.shared
     @StateObject private var networkMonitor = NetworkMonitor.shared
     
+    @Environment(\.scenePhase) private var scenePhase
+    
     @State private var isShowingFullPlayer: Bool = false
     @State private var isShowingDocumentPicker: Bool = false
     @State private var searchText: String = ""
@@ -42,6 +44,17 @@ public struct ContentView: View {
                 }
             )
         }
+        .onAppear {
+            if telegramService.authState == .authenticated {
+                telegramService.syncTracksWithServer(isSilent: true)
+            }
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active && telegramService.authState == .authenticated {
+                // Автоматическое обновление при возвращении в приложение
+                telegramService.syncTracksWithServer(isSilent: true)
+            }
+        }
     }
     
     // MARK: - Main MusicCloud View
@@ -77,7 +90,7 @@ public struct ContentView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isEditMode)
     }
     
-    // MARK: - Normal Header Bar
+    // MARK: - Normal Header Bar (Без лишней кнопки обновления)
     
     private var normalHeaderBar: some View {
         VStack(spacing: 12) {
@@ -100,27 +113,10 @@ public struct ContentView: View {
                 
                 Spacer()
                 
-                // Refresh Button (Manual sync)
-                Button(action: {
-                    withAnimation {
-                        telegramService.syncTracksWithServer(isSilent: false)
-                    }
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color(white: 0.12))
-                            .frame(width: 40, height: 40)
-                        
-                        if telegramService.isLoading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
-                        }
-                    }
+                if telegramService.isLoading {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.8)
                 }
             }
             .padding(.horizontal, 20)
@@ -161,7 +157,6 @@ public struct ContentView: View {
     
     private var editModeHeaderBar: some View {
         HStack {
-            // Кнопка назад / выхода из режима выбора
             Button(action: {
                 exitEditMode()
             }) {
@@ -185,7 +180,6 @@ public struct ContentView: View {
             
             Spacer()
             
-            // Кнопка "Выбрать все"
             Button(action: {
                 if selectedTrackIds.count == filteredTracks.count {
                     selectedTrackIds.removeAll()
@@ -207,7 +201,7 @@ public struct ContentView: View {
         .background(Color.black.opacity(0.95))
     }
     
-    // MARK: - Track List
+    // MARK: - Track List (Со свайпом сверху вниз Pull-to-Refresh)
     
     private var trackListView: some View {
         ScrollView(.vertical, showsIndicators: true) {
@@ -251,6 +245,10 @@ public struct ContentView: View {
             .padding(.top, 8)
             .padding(.bottom, playerManager.currentTrack != nil ? 130 : 90)
         }
+        .refreshable {
+            // Свайп сверху вниз для обновления
+            await telegramService.fetchMusicCloudTracksAsync()
+        }
     }
     
     // MARK: - Empty State
@@ -273,7 +271,7 @@ public struct ContentView: View {
                 .font(.system(size: 20, weight: .bold))
                 .foregroundColor(.white)
             
-            Text("Нажмите на три полоски внизу слева,\nчтобы загрузить аудиофайл в чат")
+            Text("Потяните вниз для обновления\nили нажмите на три полоски внизу слева")
                 .font(.system(size: 14))
                 .foregroundColor(Color(white: 0.5))
                 .multilineTextAlignment(.center)
@@ -432,7 +430,6 @@ public struct ContentView: View {
         let toDelete = selectedTrackIds
         exitEditMode()
         
-        // Если удаляется текущий играющий трек -> останавливаем плеер
         if let current = playerManager.currentTrack, toDelete.contains(current.id) {
             playerManager.pause()
             playerManager.currentTrack = nil

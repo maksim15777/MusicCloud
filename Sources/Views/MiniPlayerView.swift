@@ -28,9 +28,17 @@ public struct MiniPlayerView: View {
                             .fill(Color(white: 0.18))
                             .frame(width: 44, height: 44)
                         
-                        Image(systemName: "music.note")
-                            .font(.system(size: 18))
-                            .foregroundColor(Color.white.opacity(0.7))
+                        if let artwork = CacheManager.shared.cachedArtwork(for: track.id) {
+                            Image(uiImage: artwork)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 44, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else {
+                            Image(systemName: "music.note")
+                                .font(.system(size: 18))
+                                .foregroundColor(Color.white.opacity(0.7))
+                        }
                     }
                     
                     // Название и артист

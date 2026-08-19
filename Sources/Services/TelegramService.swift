@@ -317,14 +317,27 @@ public final class TelegramService: ObservableObject {
         URLSession.shared.dataTask(with: downloadURL) { data, _, _ in
             guard let data = data else { return }
             let ext = (track.fileName as NSString).pathExtension.isEmpty ? "mp3" : (track.fileName as NSString).pathExtension
-            let localURL = CacheManager.shared.saveAudio(data: data, for: track.id, fileExtension: ext)
-            
-            DispatchQueue.main.async {
-                if let index = self.tracks.firstIndex(where: { $0.id == track.id }) {
-                    self.tracks[index].localFileURL = localURL
+            if let localURL = CacheManager.shared.saveAudio(data: data, for: track.id, fileExtension: ext) {
+                // Извлекаем встроенную обложку из аудиофайла
+                _ = CacheManager.shared.extractAndSaveArtwork(from: localURL, for: track.id)
+                
+                DispatchQueue.main.async {
+                    if let index = self.tracks.firstIndex(where: { $0.id == track.id }) {
+                        self.tracks[index].localFileURL = localURL
+                    }
                 }
             }
         }.resume()
+    }
+    
+    @MainActor
+    public func fetchMusicCloudTracksAsync() async {
+        await withCheckedContinuation { continuation in
+            self.syncTracksWithServer(isSilent: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                continuation.resume()
+            }
+        }
     }
     
     // MARK: - Track Deletion
@@ -429,6 +442,9 @@ public final class TelegramService: ObservableObject {
                 let fn = json["file_name"] as? String ?? sourceURL.lastPathComponent
                 
                 let cachedURL = CacheManager.shared.saveAudio(data: audioData, for: id)
+                if let cachedURL = cachedURL {
+                    _ = CacheManager.shared.extractAndSaveArtwork(from: cachedURL, for: id)
+                }
                 
                 let newTrack = Track(
                     id: id,

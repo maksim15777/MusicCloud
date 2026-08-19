@@ -176,7 +176,7 @@ async def upload_track(
     msg = await client.send_file(
         chat,
         file_io,
-        caption=f'{{"{t_name}", "{p_name}"}}',
+        caption=None,
         attributes=[DocumentAttributeAudio(duration=0, title=t_name, performer=p_name)]
     )
     return {"id": str(msg.id), "message_id": msg.id, "title": t_name, "performer": p_name}
