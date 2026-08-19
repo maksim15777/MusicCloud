@@ -302,11 +302,11 @@ public struct AuthView: View {
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(.white)
                 
-                Text("Укажите IP вашего компьютера или адрес облачного сервера (например, http://192.168.1.50:8900):")
+                Text("Укажите адрес сервера (по умолчанию: http://199.83.103.63:8900):")
                     .font(.system(size: 14))
                     .foregroundColor(Color(white: 0.6))
                 
-                TextField("http://192.168.1.50:8900", text: $currentServerInput)
+                TextField("http://199.83.103.63:8900", text: $currentServerInput)
                     .keyboardType(.URL)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
