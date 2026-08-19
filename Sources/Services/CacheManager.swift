@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import AVFoundation
 
 public final class CacheManager {
     public static let shared = CacheManager()
