@@ -10,7 +10,7 @@ public struct TelegramConfig {
     /// Адрес сервера-прослойки.
     /// По умолчанию: http://192.168.1.50:8000 (или ваш облачный адрес на Render / Railway)
     public static var defaultBackendURL: String {
-        return UserDefaults.standard.string(forKey: "backend_server_url") ?? "http://localhost:8000"
+        return UserDefaults.standard.string(forKey: "backend_server_url") ?? "http://localhost:8900"
     }
     
     public static func saveBackendURL(_ url: String) {

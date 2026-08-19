@@ -189,5 +189,5 @@ async def delete_tracks(req: DeleteTracksRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    print("Starting MusicCloud Server on 0.0.0.0:8000 ...")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("Starting MusicCloud Server on 0.0.0.0:8900 ...")
+    uvicorn.run(app, host="0.0.0.0", port=8900)
