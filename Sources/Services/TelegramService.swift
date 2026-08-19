@@ -258,13 +258,13 @@ public final class TelegramService: ObservableObject {
             var serverTracks: [Track] = []
             for item in tracksArray {
                 let id = String(describing: item["id"] ?? UUID().uuidString)
-                let messageId = Int64(describing: item["message_id"] ?? 0) ?? 0
-                let chatId = Int64(describing: item["chat_id"] ?? 0) ?? 0
+                let messageId = (item["message_id"] as? Int64) ?? Int64(String(describing: item["message_id"] ?? 0)) ?? 0
+                let chatId = (item["chat_id"] as? Int64) ?? Int64(String(describing: item["chat_id"] ?? 0)) ?? 0
                 let title = item["title"] as? String ?? "Без названия"
                 let performer = item["performer"] as? String ?? "Неизвестный исполнитель"
-                let duration = Double(describing: item["duration"] ?? 0) ?? 0
+                let duration = (item["duration"] as? Double) ?? Double(String(describing: item["duration"] ?? 0)) ?? 0
                 let fileName = item["file_name"] as? String ?? "audio.mp3"
-                let fileSize = Int64(describing: item["file_size"] ?? 0) ?? 0
+                let fileSize = (item["file_size"] as? Int64) ?? Int64(String(describing: item["file_size"] ?? 0)) ?? 0
                 
                 // Проверяем наличие файла в локальном кэше
                 let localURL = CacheManager.shared.cachedAudioURL(for: id)
@@ -423,7 +423,7 @@ public final class TelegramService: ObservableObject {
                 }
                 
                 let id = String(describing: json["id"] ?? UUID().uuidString)
-                let messageId = Int64(describing: json["message_id"] ?? 0) ?? 0
+                let messageId = (json["message_id"] as? Int64) ?? Int64(String(describing: json["message_id"] ?? 0)) ?? 0
                 let t = json["title"] as? String ?? title
                 let p = json["performer"] as? String ?? performer
                 let fn = json["file_name"] as? String ?? sourceURL.lastPathComponent
