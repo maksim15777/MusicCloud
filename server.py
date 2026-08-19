@@ -1,6 +1,7 @@
 import io
 import asyncio
 from typing import Optional, List
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -23,7 +24,41 @@ API_HASH = "f92e244c8c272a00ae07551f08fd0427"
 TARGET_CHAT = "MusicCloud"
 SESSION_FILE = "musiccloud_session"
 
-app = FastAPI(title="MusicCloud Proxy")
+client: Optional[TelegramClient] = None
+pending_auth = {}
+
+async def get_client() -> TelegramClient:
+    global client
+    if client is None:
+        client = TelegramClient(
+            SESSION_FILE,
+            API_ID,
+            API_HASH,
+            device_model="iPhone 14 Pro",
+            system_version="iOS 16.5",
+            app_version="10.2.1",
+            lang_code="ru",
+            system_lang_code="ru"
+        )
+    if not client.is_connected():
+        await client.connect()
+    return client
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: connect to Telegram
+    tg = await get_client()
+    is_auth = await tg.is_user_authorized()
+    print(f"==================================================")
+    print(f" [MusicCloud] Telegram MTProto connected successfully!")
+    print(f" [MusicCloud] Authorized: {is_auth}")
+    print(f"==================================================")
+    yield
+    # Shutdown: disconnect cleanly
+    if client and client.is_connected():
+        await client.disconnect()
+
+app = FastAPI(title="MusicCloud Proxy", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,30 +68,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Инициализация клиента с официальным профилем iOS для надежной доставки кодов
-client = TelegramClient(
-    SESSION_FILE,
-    API_ID,
-    API_HASH,
-    device_model="iPhone 14 Pro",
-    system_version="iOS 16.5",
-    app_version="10.2.1",
-    lang_code="ru",
-    system_lang_code="ru"
-)
-pending_auth = {}
-
-@app.on_event("startup")
-async def startup():
-    await client.connect()
-    print(f"[MusicCloud] MTProto connected. Authorized: {await client.is_user_authorized()}")
-
-@app.on_event("shutdown")
-async def shutdown():
-    await client.disconnect()
-
 # ==========================================
-# Auth Models & Endpoints
+# Auth Models & Helpers
 # ==========================================
 class SendCodeRequest(BaseModel):
     phone: str
@@ -79,20 +92,17 @@ def clean_phone_number(raw_phone: str) -> str:
 
 @app.get("/auth/status")
 async def get_auth_status():
-    if not client.is_connected():
-        await client.connect()
-    return {"authorized": await client.is_user_authorized()}
+    tg = await get_client()
+    return {"authorized": await tg.is_user_authorized()}
 
 @app.post("/auth/send-code")
 async def send_code(req: SendCodeRequest):
     phone = clean_phone_number(req.phone)
+    tg = await get_client()
     try:
-        if not client.is_connected():
-            await client.connect()
-        
-        result = await client.send_code_request(phone, force_sms=False)
+        result = await tg.send_code_request(phone, force_sms=False)
         pending_auth[phone] = result.phone_code_hash
-        print(f"[MusicCloud] Code successfully sent to Telegram app for {phone}")
+        print(f"[MusicCloud] Code successfully sent to Telegram for {phone}")
         return {"status": "code_sent", "phone": phone}
     except PhoneNumberInvalidError:
         raise HTTPException(status_code=400, detail="Неверный номер телефона. Укажите номер с кодом страны (например +380... или +7...)")
@@ -110,12 +120,10 @@ async def sign_in(req: SignInRequest):
     phone = clean_phone_number(req.phone)
     code = req.code.strip().replace(" ", "").replace("-", "")
     phone_code_hash = pending_auth.get(phone)
+    tg = await get_client()
     
     try:
-        if not client.is_connected():
-            await client.connect()
-            
-        await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+        await tg.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
         print(f"[MusicCloud] User {phone} successfully authenticated!")
         return {"status": "authenticated"}
     except SessionPasswordNeededError:
@@ -128,11 +136,9 @@ async def sign_in(req: SignInRequest):
 
 @app.post("/auth/2fa")
 async def sign_in_2fa(req: Password2FARequest):
+    tg = await get_client()
     try:
-        if not client.is_connected():
-            await client.connect()
-            
-        await client.sign_in(password=req.password)
+        await tg.sign_in(password=req.password)
         print("[MusicCloud] 2FA password accepted, logged in!")
         return {"status": "authenticated"}
     except PasswordHashInvalidError:
@@ -144,14 +150,11 @@ async def sign_in_2fa(req: Password2FARequest):
 # ==========================================
 # Chat & Audio Endpoints
 # ==========================================
-async def get_target_chat():
-    if not client.is_connected():
-        await client.connect()
-        
-    if not await client.is_user_authorized():
+async def get_target_chat(tg: TelegramClient):
+    if not await tg.is_user_authorized():
         raise HTTPException(status_code=401, detail="Не авторизован в Telegram")
         
-    async for dialog in client.iter_dialogs():
+    async for dialog in tg.iter_dialogs():
         if dialog.name == TARGET_CHAT or dialog.title == TARGET_CHAT:
             return dialog.entity
             
@@ -162,9 +165,10 @@ async def get_target_chat():
 
 @app.get("/tracks")
 async def list_tracks():
-    chat = await get_target_chat()
+    tg = await get_client()
+    chat = await get_target_chat(tg)
     tracks = []
-    async for msg in client.iter_messages(chat, limit=200):
+    async for msg in tg.iter_messages(chat, limit=200):
         if msg.audio or (msg.document and any(isinstance(x, DocumentAttributeAudio) for x in msg.document.attributes)):
             doc = msg.audio or msg.document
             title = "Без названия"
@@ -195,12 +199,13 @@ async def list_tracks():
 
 @app.get("/tracks/{message_id}/audio")
 async def get_audio(message_id: int):
-    chat = await get_target_chat()
-    msg = await client.get_messages(chat, ids=message_id)
+    tg = await get_client()
+    chat = await get_target_chat(tg)
+    msg = await tg.get_messages(chat, ids=message_id)
     if not msg or not (msg.audio or msg.document):
         raise HTTPException(status_code=404, detail="Файл не найден")
     
-    audio_bytes = await client.download_media(msg, file=bytes)
+    audio_bytes = await tg.download_media(msg, file=bytes)
     return StreamingResponse(
         io.BytesIO(audio_bytes),
         media_type="audio/mpeg",
@@ -213,7 +218,8 @@ async def upload_track(
     title: Optional[str] = Form(None),
     performer: Optional[str] = Form(None)
 ):
-    chat = await get_target_chat()
+    tg = await get_client()
+    chat = await get_target_chat(tg)
     content = await file.read()
     t_name = title or file.filename or "Без названия"
     p_name = performer or "Неизвестный исполнитель"
@@ -221,7 +227,7 @@ async def upload_track(
     file_io = io.BytesIO(content)
     file_io.name = file.filename or "audio.mp3"
     
-    msg = await client.send_file(
+    msg = await tg.send_file(
         chat,
         file_io,
         caption=None,
@@ -231,11 +237,12 @@ async def upload_track(
 
 @app.post("/tracks/delete")
 async def delete_tracks(req: DeleteTracksRequest):
-    chat = await get_target_chat()
-    await client.delete_messages(chat, message_ids=req.message_ids)
+    tg = await get_client()
+    chat = await get_target_chat(tg)
+    await tg.delete_messages(chat, message_ids=req.message_ids)
     return {"status": "deleted"}
 
 if __name__ == "__main__":
     import uvicorn
     print("Starting MusicCloud Server on 0.0.0.0:8900 ...")
-    uvicorn.run(app, host="0.0.0.0", port=8900)
+    uvicorn.run("server:app", host="0.0.0.0", port=8900, reload=False)
