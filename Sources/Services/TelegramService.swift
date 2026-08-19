@@ -14,9 +14,7 @@ public final class TelegramService: ObservableObject {
     @Published public var isUploading: Bool = false
     @Published public var uploadProgress: Double = 0.0
     @Published public var isOfflineMode: Bool = false
-    
-    public let apiId: String = TelegramConfig.apiIdString
-    public let apiHash: String = TelegramConfig.apiHash
+    @Published public var serverURL: String = TelegramConfig.defaultBackendURL
     
     private let userDefaults = UserDefaults.standard
     private let kIsLoggedInKey = "tg_is_logged_in"
@@ -25,10 +23,9 @@ public final class TelegramService: ObservableObject {
     private var currentPhoneNumber: String = ""
     
     private init() {
-        // 1. Сразу загружаем сохраненные песни из локального кэша для мгновенного оффлайн-доступа
+        self.serverURL = TelegramConfig.defaultBackendURL
         self.tracks = CacheManager.shared.loadCachedTracks()
         
-        // 2. Проверяем статус входа
         if userDefaults.bool(forKey: kIsLoggedInKey) {
             self.authState = .authenticated
             self.syncTracksWithServer(isSilent: true)
@@ -36,15 +33,22 @@ public final class TelegramService: ObservableObject {
             self.authState = .enterPhoneNumber
         }
         
-        // 3. Автоматическая синхронизация при появлении интернета (без предупреждений)
         NetworkMonitor.shared.onConnectedAgain = { [weak self] in
             guard let self = self, self.authState == .authenticated else { return }
-            print("[TelegramService] Network restored. Starting silent auto-sync...")
+            print("[TelegramService] Network restored. Syncing with backend server...")
             self.syncTracksWithServer(isSilent: true)
         }
     }
     
-    // MARK: - Authentication Flow
+    public func updateServerURL(_ newURL: String) {
+        self.serverURL = newURL
+        TelegramConfig.saveBackendURL(newURL)
+        if authState == .authenticated {
+            syncTracksWithServer(isSilent: false)
+        }
+    }
+    
+    // MARK: - Real Authentication Flow via Backend Proxy
     
     public func sendPhoneNumber(_ phone: String) {
         let cleanPhone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -57,10 +61,41 @@ public final class TelegramService: ObservableObject {
         self.isLoading = true
         self.errorMessage = nil
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+        guard let url = URL(string: "\(serverURL)/auth/send-code") else {
             self.isLoading = false
-            self.authState = .enterCode(phoneNumber: cleanPhone)
+            self.errorMessage = "Некорректный адрес сервера: \(serverURL)"
+            return
         }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = ["phone": cleanPhone]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isLoading = false
+                
+                if let error = error {
+                    self.errorMessage = "Не удалось связаться с сервером: \(error.localizedDescription)"
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    self.errorMessage = "Сервер не отвечает"
+                    return
+                }
+                
+                if httpResponse.statusCode == 200 {
+                    self.authState = .enterCode(phoneNumber: cleanPhone)
+                } else {
+                    let errDetail = self.extractErrorDetail(from: data) ?? "Ошибка запроса кода"
+                    self.errorMessage = errDetail
+                }
+            }
+        }.resume()
     }
     
     public func sendAuthCode(_ code: String) {
@@ -73,19 +108,48 @@ public final class TelegramService: ObservableObject {
         self.isLoading = true
         self.errorMessage = nil
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+        guard let url = URL(string: "\(serverURL)/auth/sign-in") else {
             self.isLoading = false
-            
-            if cleanCode.lowercased() == "2fa" {
-                self.authState = .enterPassword(hint: "Облачный пароль")
-                return
-            }
-            
-            self.userDefaults.set(true, forKey: self.kIsLoggedInKey)
-            self.userDefaults.set(self.currentPhoneNumber, forKey: self.kPhoneNumberKey)
-            self.authState = .authenticated
-            self.syncTracksWithServer(isSilent: false)
+            self.errorMessage = "Некорректный адрес сервера"
+            return
         }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = ["phone": self.currentPhoneNumber, "code": cleanCode]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isLoading = false
+                
+                if let error = error {
+                    self.errorMessage = "Ошибка связи: \(error.localizedDescription)"
+                    return
+                }
+                
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self.errorMessage = "Неверный ответ сервера"
+                    return
+                }
+                
+                let status = json["status"] as? String ?? ""
+                if status == "2fa_required" {
+                    self.authState = .enterPassword(hint: "Облачный пароль 2FA")
+                } else if status == "authenticated" {
+                    self.userDefaults.set(true, forKey: self.kIsLoggedInKey)
+                    self.userDefaults.set(self.currentPhoneNumber, forKey: self.kPhoneNumberKey)
+                    self.authState = .authenticated
+                    self.syncTracksWithServer(isSilent: false)
+                } else {
+                    let errDetail = self.extractErrorDetail(from: data) ?? "Ошибка авторизации"
+                    self.errorMessage = errDetail
+                }
+            }
+        }.resume()
     }
     
     public func sendPassword2FA(_ password: String) {
@@ -97,13 +161,46 @@ public final class TelegramService: ObservableObject {
         self.isLoading = true
         self.errorMessage = nil
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+        guard let url = URL(string: "\(serverURL)/auth/2fa") else {
             self.isLoading = false
-            self.userDefaults.set(true, forKey: self.kIsLoggedInKey)
-            self.userDefaults.set(self.currentPhoneNumber, forKey: self.kPhoneNumberKey)
-            self.authState = .authenticated
-            self.syncTracksWithServer(isSilent: false)
+            self.errorMessage = "Некорректный адрес сервера"
+            return
         }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = ["password": password]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isLoading = false
+                
+                if let error = error {
+                    self.errorMessage = "Ошибка связи: \(error.localizedDescription)"
+                    return
+                }
+                
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self.errorMessage = "Неверный ответ сервера"
+                    return
+                }
+                
+                let status = json["status"] as? String ?? ""
+                if status == "authenticated" {
+                    self.userDefaults.set(true, forKey: self.kIsLoggedInKey)
+                    self.userDefaults.set(self.currentPhoneNumber, forKey: self.kPhoneNumberKey)
+                    self.authState = .authenticated
+                    self.syncTracksWithServer(isSilent: false)
+                } else {
+                    let errDetail = self.extractErrorDetail(from: data) ?? "Неверный пароль 2FA"
+                    self.errorMessage = errDetail
+                }
+            }
+        }.resume()
     }
     
     public func logOut() {
@@ -113,7 +210,7 @@ public final class TelegramService: ObservableObject {
         CacheManager.shared.clearAllCache()
     }
     
-    // MARK: - MusicCloud Fetch & Silent Auto-Sync
+    // MARK: - Server Tracks Fetch & Auto-Sync
     
     public func fetchMusicCloudTracks() {
         syncTracksWithServer(isSilent: false)
@@ -125,10 +222,19 @@ public final class TelegramService: ObservableObject {
         }
         self.errorMessage = nil
         
-        DispatchQueue.global(qos: .userInitiated).async {
-            let isOnline = NetworkMonitor.shared.isConnected
+        guard let url = URL(string: "\(serverURL)/tracks") else {
+            let cached = CacheManager.shared.loadCachedTracks()
+            self.tracks = cached
+            self.isOfflineMode = true
+            self.isLoading = false
+            return
+        }
+        
+        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+            guard let self = self else { return }
             
-            if !isOnline {
+            if error != nil || (response as? HTTPURLResponse)?.statusCode != 200 {
+                // Сервер недоступен -> тихо открываем оффлайн-кэш без предупреждений
                 let cached = CacheManager.shared.loadCachedTracks()
                 DispatchQueue.main.async {
                     self.tracks = cached
@@ -138,33 +244,87 @@ public final class TelegramService: ObservableObject {
                 return
             }
             
-            var currentLocal = CacheManager.shared.loadCachedTracks()
-            
-            if currentLocal.isEmpty {
-                currentLocal = self.generateInitialSampleTracks()
-                CacheManager.shared.saveTracksMetadata(currentLocal)
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tracksArray = json["tracks"] as? [[String: Any]] else {
+                DispatchQueue.main.async {
+                    self.tracks = CacheManager.shared.loadCachedTracks()
+                    self.isLoading = false
+                }
+                return
             }
             
-            let serverTrackIds = Set(currentLocal.map { $0.id })
-            
-            var updatedList: [Track] = []
-            for track in currentLocal {
-                if serverTrackIds.contains(track.id) {
-                    updatedList.append(track)
-                } else {
-                    CacheManager.shared.deleteAudio(for: track.id)
-                    CacheManager.shared.deleteArtwork(for: track.id)
+            // Парсим список треков с сервера
+            var serverTracks: [Track] = []
+            for item in tracksArray {
+                let id = String(describing: item["id"] ?? UUID().uuidString)
+                let messageId = Int64(describing: item["message_id"] ?? 0) ?? 0
+                let chatId = Int64(describing: item["chat_id"] ?? 0) ?? 0
+                let title = item["title"] as? String ?? "Без названия"
+                let performer = item["performer"] as? String ?? "Неизвестный исполнитель"
+                let duration = Double(describing: item["duration"] ?? 0) ?? 0
+                let fileName = item["file_name"] as? String ?? "audio.mp3"
+                let fileSize = Int64(describing: item["file_size"] ?? 0) ?? 0
+                
+                // Проверяем наличие файла в локальном кэше
+                let localURL = CacheManager.shared.cachedAudioURL(for: id)
+                
+                let track = Track(
+                    id: id,
+                    messageId: messageId,
+                    chatId: chatId,
+                    title: title,
+                    performer: performer,
+                    duration: duration,
+                    fileName: fileName,
+                    fileSize: fileSize,
+                    localFileURL: localURL,
+                    remoteFileId: "\(self.serverURL)/tracks/\(messageId)/audio",
+                    artworkURL: nil,
+                    dateAdded: Date()
+                )
+                serverTracks.append(track)
+                
+                // Если файл еще не скачан в кэш — начинаем фоновое скачивание
+                if localURL == nil && messageId > 0 {
+                    self.downloadAudioToCache(track: track)
                 }
             }
             
-            CacheManager.shared.saveTracksMetadata(updatedList)
+            // Синхронизируем удаленные треки
+            let serverIds = Set(serverTracks.map { $0.id })
+            let currentCached = CacheManager.shared.loadCachedTracks()
+            for cachedTrack in currentCached {
+                if !serverIds.contains(cachedTrack.id) {
+                    CacheManager.shared.deleteAudio(for: cachedTrack.id)
+                    CacheManager.shared.deleteArtwork(for: cachedTrack.id)
+                }
+            }
+            
+            CacheManager.shared.saveTracksMetadata(serverTracks)
             
             DispatchQueue.main.async {
-                self.tracks = updatedList
+                self.tracks = serverTracks
                 self.isOfflineMode = false
                 self.isLoading = false
             }
-        }
+        }.resume()
+    }
+    
+    private func downloadAudioToCache(track: Track) {
+        guard let downloadURL = URL(string: "\(serverURL)/tracks/\(track.messageId)/audio") else { return }
+        
+        URLSession.shared.dataTask(with: downloadURL) { data, _, _ in
+            guard let data = data else { return }
+            let ext = (track.fileName as NSString).pathExtension.isEmpty ? "mp3" : (track.fileName as NSString).pathExtension
+            let localURL = CacheManager.shared.saveAudio(data: data, for: track.id, fileExtension: ext)
+            
+            DispatchQueue.main.async {
+                if let index = self.tracks.firstIndex(where: { $0.id == track.id }) {
+                    self.tracks[index].localFileURL = localURL
+                }
+            }
+        }.resume()
     }
     
     // MARK: - Track Deletion
@@ -172,171 +332,132 @@ public final class TelegramService: ObservableObject {
     public func deleteTracks(trackIds: Set<String>, completion: (() -> Void)? = nil) {
         guard !trackIds.isEmpty else { return }
         
-        DispatchQueue.global(qos: .userInitiated).async {
-            CacheManager.shared.removeTracks(trackIds: trackIds)
-            
-            DispatchQueue.main.async {
-                self.tracks.removeAll(where: { trackIds.contains($0.id) })
-                completion?()
-            }
+        let messageIds = self.tracks
+            .filter { trackIds.contains($0.id) && $0.messageId > 0 }
+            .map { Int($0.messageId) }
+        
+        CacheManager.shared.removeTracks(trackIds: trackIds)
+        self.tracks.removeAll(where: { trackIds.contains($0.id) })
+        
+        if !messageIds.isEmpty, let url = URL(string: "\(serverURL)/tracks/delete") {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let body = ["message_ids": messageIds]
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            URLSession.shared.dataTask(with: request).resume()
         }
+        
+        completion?()
     }
     
-    // MARK: - Upload Audio Track to "MusicCloud"
+    // MARK: - Upload Audio File via Backend Proxy
     
     public func uploadAudioFile(from sourceURL: URL, completion: @escaping (Result<Track, Error>) -> Void) {
         self.isUploading = true
         self.uploadProgress = 0.1
         
-        DispatchQueue.global(qos: .userInitiated).async {
-            let asset = AVURLAsset(url: sourceURL)
-            var title = sourceURL.deletingPathExtension().lastPathComponent
-            var performer = "Неизвестный исполнитель"
-            var duration: TimeInterval = 0
-            
-            let metadata = asset.metadata
-            for item in metadata {
-                if let commonKey = item.commonKey?.rawValue {
-                    switch commonKey {
-                    case "title":
-                        if let value = item.stringValue, !value.isEmpty { title = value }
-                    case "artist":
-                        if let value = item.stringValue, !value.isEmpty { performer = value }
-                    default:
-                        break
-                    }
-                }
+        guard let url = URL(string: "\(serverURL)/tracks/upload") else {
+            self.isUploading = false
+            completion(.failure(NSError(domain: "MusicCloud", code: -1, userInfo: [NSLocalizedDescriptionKey: "Некорректный адрес сервера"])))
+            return
+        }
+        
+        let asset = AVURLAsset(url: sourceURL)
+        var title = sourceURL.deletingPathExtension().lastPathComponent
+        var performer = "Неизвестный исполнитель"
+        
+        for item in asset.metadata {
+            if let key = item.commonKey?.rawValue {
+                if key == "title", let val = item.stringValue, !val.isEmpty { title = val }
+                if key == "artist", let val = item.stringValue, !val.isEmpty { performer = val }
             }
-            
-            let assetDuration = CMTimeGetSeconds(asset.duration)
-            if !assetDuration.isNaN && assetDuration > 0 {
-                duration = assetDuration
-            }
-            
-            let trackId = UUID().uuidString
-            
-            guard let cachedURL = CacheManager.shared.copyAudioFile(from: sourceURL, for: trackId) else {
-                DispatchQueue.main.async {
-                    self.isUploading = false
-                    completion(.failure(NSError(domain: "MusicCloud", code: -1, userInfo: [NSLocalizedDescriptionKey: "Не удалось сохранить файл"])))
-                }
-                return
-            }
-            
-            let newTrack = Track(
-                id: trackId,
-                messageId: Int64(Date().timeIntervalSince1970),
-                chatId: 1001234567,
-                title: title,
-                performer: performer,
-                duration: duration,
-                fileName: sourceURL.lastPathComponent,
-                fileSize: (try? FileManager.default.attributesOfItem(atPath: cachedURL.path)[.size] as? Int64) ?? 0,
-                localFileURL: cachedURL,
-                remoteFileId: "tg_audio_\(trackId)",
-                artworkURL: nil,
-                dateAdded: Date()
-            )
-            
+        }
+        
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        
+        guard let audioData = try? Data(contentsOf: sourceURL) else {
+            self.isUploading = false
+            completion(.failure(NSError(domain: "MusicCloud", code: -1, userInfo: [NSLocalizedDescriptionKey: "Не удалось прочитать аудиофайл"])))
+            return
+        }
+        
+        var body = Data()
+        // File field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(sourceURL.lastPathComponent)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: audio/mpeg\r\n\r\n".data(using: .utf8)!)
+        body.append(audioData)
+        body.append("\r\n".data(using: .utf8)!)
+        
+        // Title field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"title\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(title)\r\n".data(using: .utf8)!)
+        
+        // Performer field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"performer\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(performer)\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        
+        request.httpBody = body
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
-                self.uploadProgress = 0.7
-            }
-            
-            usleep(300_000)
-            
-            DispatchQueue.main.async {
-                self.uploadProgress = 1.0
+                guard let self = self else { return }
                 self.isUploading = false
+                
+                if let error = error {
+                    completion(.failure(error))
+                    return
+                }
+                
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    completion(.failure(NSError(domain: "MusicCloud", code: -1, userInfo: [NSLocalizedDescriptionKey: "Ошибка ответа сервера"])))
+                    return
+                }
+                
+                let id = String(describing: json["id"] ?? UUID().uuidString)
+                let messageId = Int64(describing: json["message_id"] ?? 0) ?? 0
+                let t = json["title"] as? String ?? title
+                let p = json["performer"] as? String ?? performer
+                let fn = json["file_name"] as? String ?? sourceURL.lastPathComponent
+                
+                let cachedURL = CacheManager.shared.saveAudio(data: audioData, for: id)
+                
+                let newTrack = Track(
+                    id: id,
+                    messageId: messageId,
+                    chatId: 1001234567,
+                    title: t,
+                    performer: p,
+                    duration: CMTimeGetSeconds(asset.duration),
+                    fileName: fn,
+                    fileSize: Int64(audioData.count),
+                    localFileURL: cachedURL,
+                    remoteFileId: "\(self.serverURL)/tracks/\(messageId)/audio",
+                    artworkURL: nil,
+                    dateAdded: Date()
+                )
                 
                 self.tracks.insert(newTrack, at: 0)
                 CacheManager.shared.saveTracksMetadata(self.tracks)
                 
                 completion(.success(newTrack))
             }
-        }
+        }.resume()
     }
     
-    // MARK: - Initial Sample Tracks Generator
-    
-    private func generateInitialSampleTracks() -> [Track] {
-        let sampleData: [(title: String, artist: String, duration: TimeInterval)] = [
-            ("Midnight City Dreams", "MusicCloud Synthwave", 214),
-            ("Deep Focus & Chill Beats", "Lofi Telegram Lounge", 185),
-            ("Atmospheric Ambient Flow", "Cloud Soundscape", 248),
-            ("Cosmic Journey", "Starlight Audio", 195)
-        ]
-        
-        var generated: [Track] = []
-        for (index, item) in sampleData.enumerated() {
-            let trackId = "sample_track_\(index + 1)"
-            let audioURL = self.createSilentAudioFile(named: "\(trackId).wav")
-            
-            let track = Track(
-                id: trackId,
-                messageId: Int64(1000 + index),
-                chatId: 1001234567,
-                title: item.title,
-                performer: item.artist,
-                duration: item.duration,
-                fileName: "\(item.title).mp3",
-                fileSize: 4_500_000,
-                localFileURL: audioURL,
-                remoteFileId: "tg_\(trackId)",
-                artworkURL: nil,
-                dateAdded: Date().addingTimeInterval(-Double(index * 3600))
-            )
-            generated.append(track)
+    private func extractErrorDetail(from data: Data?) -> String? {
+        guard let data = data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
         }
-        
-        return generated
-    }
-    
-    private func createSilentAudioFile(named filename: String) -> URL? {
-        let tempDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("MusicCloud/Audio", isDirectory: true)
-        let fileURL = tempDir.appendingPathComponent(filename)
-        
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            return fileURL
-        }
-        
-        let sampleRate: Double = 44100.0
-        let durationSeconds: Double = 5.0
-        let numSamples = Int(sampleRate * durationSeconds)
-        let numChannels: Int16 = 2
-        let bitsPerSample: Int16 = 16
-        let byteRate = Int32(sampleRate) * Int32(numChannels) * Int32(bitsPerSample / 8)
-        let blockAlign = Int16(numChannels * (bitsPerSample / 8))
-        let subchunk2Size = Int32(numSamples * Int(numChannels) * Int(bitsPerSample / 8))
-        let chunkSize = 36 + subchunk2Size
-        
-        var data = Data()
-        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46])
-        data.append(contentsOf: withUnsafeBytes(of: chunkSize.littleEndian) { Array($0) })
-        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45])
-        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20])
-        let subchunk1Size: Int32 = 16
-        data.append(contentsOf: withUnsafeBytes(of: subchunk1Size.littleEndian) { Array($0) })
-        let audioFormat: Int16 = 1
-        data.append(contentsOf: withUnsafeBytes(of: audioFormat.littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: numChannels.littleEndian) { Array($0) })
-        let sRate = Int32(sampleRate)
-        data.append(contentsOf: withUnsafeBytes(of: sRate.littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: blockAlign.littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian) { Array($0) })
-        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61])
-        data.append(contentsOf: withUnsafeBytes(of: subchunk2Size.littleEndian) { Array($0) })
-        
-        for i in 0..<numSamples {
-            let t = Double(i) / sampleRate
-            let frequency = 220.0 + sin(t * 2.0 * .pi * 0.2) * 50.0
-            let sample = Int16(sin(2.0 * .pi * frequency * t) * 8000.0)
-            data.append(contentsOf: withUnsafeBytes(of: sample.littleEndian) { Array($0) })
-            data.append(contentsOf: withUnsafeBytes(of: sample.littleEndian) { Array($0) })
-        }
-        
-        try? data.write(to: fileURL)
-        return fileURL
+        return json["detail"] as? String ?? json["message"] as? String
     }
 }

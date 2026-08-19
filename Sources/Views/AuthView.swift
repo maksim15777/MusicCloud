@@ -6,6 +6,8 @@ public struct AuthView: View {
     @State private var phoneNumber: String = ""
     @State private var authCode: String = ""
     @State private var password2FA: String = ""
+    @State private var isShowingServerSheet: Bool = false
+    @State private var currentServerInput: String = ""
     
     public var body: some View {
         ZStack {
@@ -34,7 +36,7 @@ public struct AuthView: View {
                         .font(.system(size: 14, weight: .regular))
                         .foregroundColor(Color(white: 0.5))
                 }
-                .padding(.bottom, 36)
+                .padding(.bottom, 32)
                 
                 // Form Card based on Auth State
                 VStack(spacing: 18) {
@@ -71,7 +73,30 @@ public struct AuthView: View {
                 .padding(.horizontal, 20)
                 
                 Spacer()
+                
+                // Server URL indicator button at bottom
+                Button(action: {
+                    currentServerInput = telegramService.serverURL
+                    isShowingServerSheet = true
+                }) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.green.opacity(0.7))
+                            .frame(width: 6, height: 6)
+                        Text("Сервер: \(telegramService.serverURL)")
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(Color(white: 0.4))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color(white: 0.08)))
+                }
+                .padding(.bottom, 20)
             }
+        }
+        .sheet(isPresented: $isShowingServerSheet) {
+            serverConfigSheet
         }
     }
     
@@ -264,5 +289,46 @@ public struct AuthView: View {
                 .foregroundColor(Color(white: 0.8))
         }
         .padding(.vertical, 20)
+    }
+    
+    // MARK: - Server URL Sheet
+    
+    private var serverConfigSheet: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Адрес сервера MusicCloud")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.white)
+                
+                Text("Укажите IP вашего компьютера или адрес облачного сервера (например, http://192.168.1.50:8000):")
+                    .font(.system(size: 14))
+                    .foregroundColor(Color(white: 0.6))
+                
+                TextField("http://192.168.1.50:8000", text: $currentServerInput)
+                    .keyboardType(.URL)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                    .padding(14)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Color(white: 0.12)))
+                    .foregroundColor(.white)
+                
+                Button(action: {
+                    telegramService.updateServerURL(currentServerInput)
+                    isShowingServerSheet = false
+                }) {
+                    Text("Сохранить")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(Color.white))
+                }
+                
+                Spacer()
+            }
+            .padding(24)
+        }
     }
 }
