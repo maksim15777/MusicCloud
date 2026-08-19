@@ -10,6 +10,7 @@ public struct ContentView: View {
     @State private var isShowingFullPlayer: Bool = false
     @State private var isShowingDocumentPicker: Bool = false
     @State private var searchText: String = ""
+    @FocusState private var isSearchFocused: Bool
     
     // Режим выбора и редактирования (Удаление)
     @State private var isEditMode: Bool = false
@@ -122,7 +123,7 @@ public struct ContentView: View {
             .padding(.horizontal, 20)
             .padding(.top, 14)
             
-            // Search field
+            // Search field with dismiss keyboard arrow
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 14))
@@ -132,6 +133,7 @@ public struct ContentView: View {
                     .font(.system(size: 15))
                     .foregroundColor(.white)
                     .accentColor(.white)
+                    .focused($isSearchFocused)
                 
                 if !searchText.isEmpty {
                     Button(action: { searchText = "" }) {
@@ -140,6 +142,21 @@ public struct ContentView: View {
                             .foregroundColor(Color(white: 0.45))
                     }
                 }
+                
+                // Кнопка-стрелочка для скрытия клавиатуры
+                if isSearchFocused {
+                    Button(action: {
+                        isSearchFocused = false
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }) {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(Color(white: 0.85))
+                            .padding(4)
+                            .background(Circle().fill(Color(white: 0.18)))
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -147,6 +164,7 @@ public struct ContentView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(white: 0.10))
             )
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSearchFocused)
             .padding(.horizontal, 20)
             .padding(.bottom, 8)
         }
