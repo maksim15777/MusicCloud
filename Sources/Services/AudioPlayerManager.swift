@@ -407,7 +407,7 @@ public final class AudioPlayerManager: NSObject, ObservableObject {
             audioURL = local
         } else if let cached = CacheManager.shared.cachedAudioURL(for: track.id) {
             audioURL = cached
-        } else if let remoteURL = URL(string: track.remoteFileId), !track.remoteFileId.isEmpty {
+        } else if let remoteId = track.remoteFileId, !remoteId.isEmpty, let remoteURL = URL(string: remoteId) {
             audioURL = remoteURL
         } else if track.messageId > 0 {
             audioURL = URL(string: "\(TelegramConfig.defaultBackendURL)/tracks/\(track.messageId)/audio")
