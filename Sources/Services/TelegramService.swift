@@ -31,6 +31,7 @@ public final class TelegramService: ObservableObject {
             self.syncTracksWithServer(isSilent: true)
         } else {
             self.authState = .enterPhoneNumber
+            self.checkServerAuthStatus()
         }
         
         NetworkMonitor.shared.onConnectedAgain = { [weak self] in
@@ -38,6 +39,22 @@ public final class TelegramService: ObservableObject {
             print("[TelegramService] Network restored. Syncing with backend server...")
             self.syncTracksWithServer(isSilent: true)
         }
+    }
+    
+    public func checkServerAuthStatus() {
+        guard let url = URL(string: "\(serverURL)/auth/status") else { return }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let self = self, let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let authorized = json["authorized"] as? Bool,
+                  authorized == true else { return }
+            
+            DispatchQueue.main.async {
+                self.userDefaults.set(true, forKey: self.kIsLoggedInKey)
+                self.authState = .authenticated
+                self.syncTracksWithServer(isSilent: true)
+            }
+        }.resume()
     }
     
     public func updateServerURL(_ newURL: String) {
@@ -89,7 +106,17 @@ public final class TelegramService: ObservableObject {
                 }
                 
                 if httpResponse.statusCode == 200 {
-                    self.authState = .enterCode(phoneNumber: cleanPhone)
+                    if let data = data,
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let status = json["status"] as? String,
+                       status == "authenticated" {
+                        self.userDefaults.set(true, forKey: self.kIsLoggedInKey)
+                        self.userDefaults.set(cleanPhone, forKey: self.kPhoneNumberKey)
+                        self.authState = .authenticated
+                        self.syncTracksWithServer(isSilent: false)
+                    } else {
+                        self.authState = .enterCode(phoneNumber: cleanPhone)
+                    }
                 } else {
                     let errDetail = self.extractErrorDetail(from: data) ?? "Ошибка запроса кода"
                     self.errorMessage = errDetail
@@ -208,6 +235,12 @@ public final class TelegramService: ObservableObject {
         self.authState = .enterPhoneNumber
         self.tracks = []
         CacheManager.shared.clearAllCache()
+        
+        if let url = URL(string: "\(serverURL)/auth/logout") {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            URLSession.shared.dataTask(with: request).resume()
+        }
     }
     
     // MARK: - Server Tracks Fetch & Auto-Sync

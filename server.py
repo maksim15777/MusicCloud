@@ -1,4 +1,5 @@
 import io
+import os
 import asyncio
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -46,7 +47,6 @@ async def get_client() -> TelegramClient:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: connect to Telegram
     tg = await get_client()
     is_auth = await tg.is_user_authorized()
     print(f"==================================================")
@@ -54,7 +54,6 @@ async def lifespan(app: FastAPI):
     print(f" [MusicCloud] Authorized: {is_auth}")
     print(f"==================================================")
     yield
-    # Shutdown: disconnect cleanly
     if client and client.is_connected():
         await client.disconnect()
 
@@ -99,6 +98,12 @@ async def get_auth_status():
 async def send_code(req: SendCodeRequest):
     phone = clean_phone_number(req.phone)
     tg = await get_client()
+    
+    # Если сервер уже авторизован в Telegram
+    if await tg.is_user_authorized():
+        print(f"[MusicCloud] User already authorized! Skipping code request.")
+        return {"status": "authenticated", "message": "Already authorized"}
+        
     try:
         result = await tg.send_code_request(phone, force_sms=False)
         pending_auth[phone] = result.phone_code_hash
@@ -111,8 +116,8 @@ async def send_code(req: SendCodeRequest):
     except Exception as e:
         err_str = str(e)
         print(f"[send_code error]: {err_str}")
-        if "all available options" in err_str.lower():
-            err_str = "Telegram не смог отправить код. Убедитесь, что у вас открыто приложение Telegram (код приходит прямо в чат Telegram) и номер начинается с '+' и кода страны."
+        if "already used" in err_str.lower() or "all available options" in err_str.lower():
+            err_str = "Код уже был отправлен в ваш Telegram. Проверьте сообщения в приложении Telegram или подождите 1-2 минуты перед повторным запросом."
         raise HTTPException(status_code=400, detail=err_str)
 
 @app.post("/auth/sign-in")
@@ -146,6 +151,16 @@ async def sign_in_2fa(req: Password2FARequest):
     except Exception as e:
         print(f"[2fa error]: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/auth/logout")
+async def logout():
+    tg = await get_client()
+    try:
+        if await tg.is_user_authorized():
+            await tg.log_out()
+    except Exception as e:
+        print(f"[logout error]: {e}")
+    return {"status": "logged_out"}
 
 # ==========================================
 # Chat & Audio Endpoints
