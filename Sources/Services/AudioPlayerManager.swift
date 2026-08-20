@@ -399,10 +399,22 @@ public final class AudioPlayerManager: NSObject, ObservableObject {
         isBuffering = true
         
         removeTimeObserver()
+        setupAudioSession()
         
-        // Determine audio URL (local cache or remote)
-        guard let url = track.localFileURL ?? CacheManager.shared.cachedAudioURL(for: track.id) else {
-            print("[AudioPlayerManager] No local audio file URL for track: \(track.title)")
+        // Determine audio URL (local cache or remote streaming)
+        var audioURL: URL? = nil
+        if let local = track.localFileURL, FileManager.default.fileExists(atPath: local.path) {
+            audioURL = local
+        } else if let cached = CacheManager.shared.cachedAudioURL(for: track.id) {
+            audioURL = cached
+        } else if let remoteURL = URL(string: track.remoteFileId), !track.remoteFileId.isEmpty {
+            audioURL = remoteURL
+        } else if track.messageId > 0 {
+            audioURL = URL(string: "\(TelegramConfig.defaultBackendURL)/tracks/\(track.messageId)/audio")
+        }
+        
+        guard let url = audioURL else {
+            print("[AudioPlayerManager] No audio URL available for track: \(track.title)")
             isBuffering = false
             return
         }

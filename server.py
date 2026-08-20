@@ -3,7 +3,7 @@ import os
 import asyncio
 from typing import Optional, List
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -221,10 +221,14 @@ async def get_audio(message_id: int):
         raise HTTPException(status_code=404, detail="Файл не найден")
     
     audio_bytes = await tg.download_media(msg, file=bytes)
-    return StreamingResponse(
-        io.BytesIO(audio_bytes),
+    return Response(
+        content=audio_bytes,
         media_type="audio/mpeg",
-        headers={"Content-Disposition": f'inline; filename="track_{message_id}.mp3"'}
+        headers={
+            "Content-Disposition": f'inline; filename="track_{message_id}.mp3"',
+            "Content-Length": str(len(audio_bytes)),
+            "Accept-Ranges": "bytes"
+        }
     )
 
 @app.post("/tracks/upload")
