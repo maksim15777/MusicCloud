@@ -11,3 +11,9 @@ Payload/
 .idea/
 .vscode/
 .gitlocal/
+__pycache__/
+*.pyc
+*.session
+*.session-journal
+*.db
+*.db-journal

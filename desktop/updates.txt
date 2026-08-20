@@ -1,0 +1,5 @@
+updated: yes
+version: 1.0.6
+platform: desktop
+files: desktop_player.py,updater.py,app.py
+changelog: Fixed Tkinter lambda exception scope and improved Telegram login error display.

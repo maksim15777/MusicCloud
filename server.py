@@ -1,13 +1,10 @@
-import os
 import io
-import sqlite3
-import hashlib
 import asyncio
 from typing import Optional, List
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Header
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse, PlainTextResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from telethon import TelegramClient
 from telethon.errors import (
@@ -20,60 +17,13 @@ from telethon.errors import (
 from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeFilename
 
 # ==========================================
-# Configurations & Constants
+# Telegram API Credentials
 # ==========================================
 API_ID = 35197117
 API_HASH = "f92e244c8c272a00ae07551f08fd0427"
 TARGET_CHAT = "MusicCloud"
 SESSION_FILE = "musiccloud_session"
-DB_FILE = "musiccloud.db"
-DESKTOP_APP_FILE = "desktop_player.py"
-CURRENT_DESKTOP_VERSION = "1.0.1"
 
-# ==========================================
-# Database Initialization (Ecosystem Accounts)
-# ==========================================
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    # Таблица пользователей экосистемы MusicCloud
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        tg_phone TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    
-    # Таблица метаданных и версий приложений
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS app_versions (
-        platform TEXT PRIMARY KEY,
-        version TEXT NOT NULL,
-        changelog TEXT,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    
-    cursor.execute("""
-    INSERT OR REPLACE INTO app_versions (platform, version, changelog)
-    VALUES ('desktop', ?, 'Initial release with Auto-Updater and Apple Dark UI')
-    """, (CURRENT_DESKTOP_VERSION,))
-    
-    conn.commit()
-    conn.close()
-
-init_db()
-
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-# ==========================================
-# Telethon Client Management
-# ==========================================
 client: Optional[TelegramClient] = None
 pending_auth = {}
 
@@ -96,19 +46,19 @@ async def get_client() -> TelegramClient:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup: connect to Telegram
     tg = await get_client()
     is_auth = await tg.is_user_authorized()
-    print("==================================================")
-    print(" [MusicCloud Ecosystem] Backend Server Started!")
-    print(f" [MusicCloud] Telegram MTProto Connected: {is_auth}")
-    print(f" [MusicCloud] Database: {DB_FILE} initialized")
-    print(f" [MusicCloud] Desktop App Version: {CURRENT_DESKTOP_VERSION}")
-    print("==================================================")
+    print(f"==================================================")
+    print(f" [MusicCloud] Telegram MTProto connected successfully!")
+    print(f" [MusicCloud] Authorized: {is_auth}")
+    print(f"==================================================")
     yield
+    # Shutdown: disconnect cleanly
     if client and client.is_connected():
         await client.disconnect()
 
-app = FastAPI(title="MusicCloud Ecosystem Server", lifespan=lifespan)
+app = FastAPI(title="MusicCloud Proxy", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -119,17 +69,8 @@ app.add_middleware(
 )
 
 # ==========================================
-# Models
+# Auth Models & Helpers
 # ==========================================
-class UserRegisterRequest(BaseModel):
-    username: str
-    password: str
-    phone: Optional[str] = None
-
-class UserLoginRequest(BaseModel):
-    username: str
-    password: str
-
 class SendCodeRequest(BaseModel):
     phone: str
 
@@ -149,95 +90,6 @@ def clean_phone_number(raw_phone: str) -> str:
         cleaned = "+" + cleaned
     return cleaned
 
-# ==========================================
-# Ecosystem Account Endpoints
-# ==========================================
-@app.post("/api/accounts/register")
-async def register_account(req: UserRegisterRequest):
-    u = req.username.strip().lower()
-    if len(u) < 3:
-        raise HTTPException(status_code=400, detail="Имя пользователя должно содержать минимум 3 символа")
-    if len(req.password) < 4:
-        raise HTTPException(status_code=400, detail="Пароль должен содержать минимум 4 символа")
-    
-    p_hash = hash_password(req.password)
-    phone = clean_phone_number(req.phone) if req.phone else None
-    
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO users (username, password_hash, tg_phone) VALUES (?, ?, ?)", (u, p_hash, phone))
-        conn.commit()
-        user_id = cursor.lastrowid
-        return {"status": "registered", "user_id": user_id, "username": u}
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400, detail="Пользователь с таким именем уже существует")
-    finally:
-        conn.close()
-
-@app.post("/api/accounts/login")
-async def login_account(req: UserLoginRequest):
-    u = req.username.strip().lower()
-    p_hash = hash_password(req.password)
-    
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, username, tg_phone FROM users WHERE username = ? AND password_hash = ?", (u, p_hash))
-    user = cursor.fetchone()
-    conn.close()
-    
-    if not user:
-        raise HTTPException(status_code=401, detail="Неверное имя пользователя или пароль")
-    
-    return {
-        "status": "authenticated",
-        "user": {
-            "id": user[0],
-            "username": user[1],
-            "tg_phone": user[2]
-        }
-    }
-
-# ==========================================
-# Desktop Auto-Updater Endpoints
-# ==========================================
-@app.get("/api/version")
-async def get_version():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT version, changelog FROM app_versions WHERE platform = 'desktop'")
-    row = cursor.fetchone()
-    conn.close()
-    
-    v = row[0] if row else CURRENT_DESKTOP_VERSION
-    changelog = row[1] if row else "Latest update"
-    
-    # Считаем хэш файла приложения
-    app_hash = ""
-    if os.path.exists(DESKTOP_APP_FILE):
-        with open(DESKTOP_APP_FILE, "rb") as f:
-            app_hash = hashlib.sha256(f.read()).hexdigest()
-            
-    return {
-        "version": v,
-        "hash": app_hash,
-        "changelog": changelog,
-        "download_url": "/api/desktop/latest"
-    }
-
-@app.get("/api/desktop/latest")
-async def download_latest_desktop_code():
-    if not os.path.exists(DESKTOP_APP_FILE):
-        raise HTTPException(status_code=404, detail="Файл обновления desktop_player.py не найден на сервере")
-    return FileResponse(
-        DESKTOP_APP_FILE,
-        media_type="text/x-python",
-        filename="desktop_player.py"
-    )
-
-# ==========================================
-# Telegram MTProto Auth Endpoints
-# ==========================================
 @app.get("/auth/status")
 async def get_auth_status():
     tg = await get_client()
@@ -250,17 +102,17 @@ async def send_code(req: SendCodeRequest):
     try:
         result = await tg.send_code_request(phone, force_sms=False)
         pending_auth[phone] = result.phone_code_hash
-        print(f"[MusicCloud] Code sent to Telegram app for {phone}")
+        print(f"[MusicCloud] Code successfully sent to Telegram for {phone}")
         return {"status": "code_sent", "phone": phone}
     except PhoneNumberInvalidError:
         raise HTTPException(status_code=400, detail="Неверный номер телефона. Укажите номер с кодом страны (например +380... или +7...)")
     except FloodWaitError as e:
-        raise HTTPException(status_code=429, detail=f"Слишком много попыток. Подождите {e.seconds} сек.")
+        raise HTTPException(status_code=429, detail=f"Слишком много попыток. Подождите {e.seconds} секунд")
     except Exception as e:
         err_str = str(e)
         print(f"[send_code error]: {err_str}")
         if "all available options" in err_str.lower():
-            err_str = "Telegram не смог отправить код. Убедитесь, что открыто приложение Telegram (код приходит в чат) и номер начинается с '+'."
+            err_str = "Telegram не смог отправить код. Убедитесь, что у вас открыто приложение Telegram (код приходит прямо в чат Telegram) и номер начинается с '+' и кода страны."
         raise HTTPException(status_code=400, detail=err_str)
 
 @app.post("/auth/sign-in")
@@ -290,7 +142,7 @@ async def sign_in_2fa(req: Password2FARequest):
         print("[MusicCloud] 2FA password accepted, logged in!")
         return {"status": "authenticated"}
     except PasswordHashInvalidError:
-        raise HTTPException(status_code=400, detail="Неверный пароль 2FA")
+        raise HTTPException(status_code=400, detail="Неверный пароль двухфакторной аутентификации")
     except Exception as e:
         print(f"[2fa error]: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -392,5 +244,5 @@ async def delete_tracks(req: DeleteTracksRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    print("Starting MusicCloud Ecosystem Server on 0.0.0.0:8900 ...")
+    print("Starting MusicCloud Server on 0.0.0.0:8900 ...")
     uvicorn.run("server:app", host="0.0.0.0", port=8900, reload=False)
