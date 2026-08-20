@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import CoreTransferable
 import AVFoundation
 
 public struct UploadTrackSheet: View {
