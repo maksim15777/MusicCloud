@@ -394,48 +394,41 @@ public final class TelegramService: ObservableObject {
     
     private func downloadAudioToCache(track: Track) {
         guard let downloadURL = URL(string: "\(serverURL)/tracks/\(track.messageId)/audio") else { return }
+        let trackId = track.id
+        let fileName = track.fileName
         
-        DispatchQueue.main.async {
-            self.downloadProgress[track.id] = 0.1
-        }
-        
-        // Симулируем красивый плавный прогресс до завершения ответа
-        let timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] t in
-            guard let self = self else { t.invalidate(); return }
-            if let current = self.downloadProgress[track.id], current < 0.85 {
-                self.downloadProgress[track.id] = min(0.85, current + 0.15)
-            }
+        DispatchQueue.main.async { [weak self] in
+            self?.downloadProgress[trackId] = 0.2
         }
         
         let task = URLSession.shared.dataTask(with: downloadURL) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
-            timer.invalidate()
-            guard let self = self, let data = data else {
+            guard let data = data, error == nil else {
                 DispatchQueue.main.async {
-                    self?.downloadProgress.removeValue(forKey: track.id)
+                    self?.downloadProgress.removeValue(forKey: trackId)
                 }
                 return
             }
             
-            let ext = (track.fileName as NSString).pathExtension.isEmpty ? "mp3" : (track.fileName as NSString).pathExtension
-            if let localURL = CacheManager.shared.saveAudio(data: data, for: track.id, fileExtension: ext) {
-                _ = CacheManager.shared.extractAndSaveArtwork(from: localURL, for: track.id)
+            let ext = (fileName as NSString).pathExtension.isEmpty ? "mp3" : (fileName as NSString).pathExtension
+            if let localURL = CacheManager.shared.saveAudio(data: data, for: trackId, fileExtension: ext) {
+                _ = CacheManager.shared.extractAndSaveArtwork(from: localURL, for: trackId)
                 
                 DispatchQueue.main.async {
-                    self.downloadProgress[track.id] = 1.0
-                    if let index = self.tracks.firstIndex(where: { $0.id == track.id }) {
+                    guard let self = self else { return }
+                    self.downloadProgress[trackId] = 1.0
+                    if let index = self.tracks.firstIndex(where: { $0.id == trackId }) {
                         self.tracks[index].localFileURL = localURL
                     }
                     
-                    // Плавно скрываем индикатор прогресса
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                         withAnimation {
-                            self.downloadProgress.removeValue(forKey: track.id)
+                            self.downloadProgress.removeValue(forKey: trackId)
                         }
                     }
                 }
             } else {
                 DispatchQueue.main.async {
-                    self.downloadProgress.removeValue(forKey: track.id)
+                    self?.downloadProgress.removeValue(forKey: trackId)
                 }
             }
         }
