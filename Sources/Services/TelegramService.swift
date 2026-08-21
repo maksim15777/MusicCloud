@@ -427,11 +427,11 @@ public final class TelegramService: ObservableObject {
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                         withAnimation {
-                            self.downloadProgress.removeValue(forKey: trackId)
+                            self.downloadProgress[trackId] = nil
                         }
                     }
                 } else {
-                    self.downloadProgress.removeValue(forKey: trackId)
+                    self.downloadProgress[trackId] = nil
                 }
             }
         }.resume()
