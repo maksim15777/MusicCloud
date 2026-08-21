@@ -2,6 +2,21 @@ import Foundation
 import UIKit
 import AVFoundation
 
+public struct ToastMessage: Identifiable, Equatable {
+    public let id = UUID()
+    public let title: String
+    public let message: String?
+    public let iconName: String
+    public let isError: Bool
+    
+    public init(title: String, message: String? = nil, iconName: String = "info.circle.fill", isError: Bool = false) {
+        self.title = title
+        self.message = message
+        self.iconName = iconName
+        self.isError = isError
+    }
+}
+
 public final class TelegramService: ObservableObject {
     public static let shared = TelegramService()
     
@@ -13,6 +28,8 @@ public final class TelegramService: ObservableObject {
     @Published public var tracks: [Track] = []
     @Published public var isUploading: Bool = false
     @Published public var uploadProgress: Double = 0.0
+    @Published public var downloadProgress: [String: Double] = [:] // [TrackId: Progress 0.0...1.0]
+    @Published public var currentToast: ToastMessage? = nil
     @Published public var isOfflineMode: Bool = false
     @Published public var serverURL: String = TelegramConfig.defaultBackendURL
     
@@ -38,6 +55,30 @@ public final class TelegramService: ObservableObject {
             guard let self = self, self.authState == .authenticated else { return }
             print("[TelegramService] Network restored. Syncing with backend server...")
             self.syncTracksWithServer(isSilent: true)
+        }
+    }
+    
+    // MARK: - Toast Notifications
+    
+    public func showToast(title: String, message: String? = nil, iconName: String = "info.circle.fill", isError: Bool = false) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            self.currentToast = ToastMessage(title: title, message: message, iconName: iconName, isError: isError)
+        }
+        
+        let toastId = self.currentToast?.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self = self else { return }
+            if self.currentToast?.id == toastId {
+                withAnimation(.easeOut(duration: 0.25)) {
+                    self.currentToast = nil
+                }
+            }
+        }
+    }
+    
+    public func dismissToast() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            self.currentToast = nil
         }
     }
     
@@ -113,6 +154,7 @@ public final class TelegramService: ObservableObject {
                         self.userDefaults.set(true, forKey: self.kIsLoggedInKey)
                         self.userDefaults.set(cleanPhone, forKey: self.kPhoneNumberKey)
                         self.authState = .authenticated
+                        self.showToast(title: "Вход выполнен", message: "Подключено к Telegram", iconName: "checkmark.circle.fill")
                         self.syncTracksWithServer(isSilent: false)
                     } else {
                         self.authState = .enterCode(phoneNumber: cleanPhone)
@@ -170,6 +212,7 @@ public final class TelegramService: ObservableObject {
                     self.userDefaults.set(true, forKey: self.kIsLoggedInKey)
                     self.userDefaults.set(self.currentPhoneNumber, forKey: self.kPhoneNumberKey)
                     self.authState = .authenticated
+                    self.showToast(title: "Вход выполнен", message: "Добро пожаловать в MusicCloud!", iconName: "checkmark.circle.fill")
                     self.syncTracksWithServer(isSilent: false)
                 } else {
                     let errDetail = self.extractErrorDetail(from: data) ?? "Ошибка авторизации"
@@ -206,7 +249,7 @@ public final class TelegramService: ObservableObject {
                 self.isLoading = false
                 
                 if let error = error {
-                    self.errorMessage = "Ошибка связи: \(error.localizedDescription)"
+                    self.errorMessage = "Ошибка: \(error.localizedDescription)"
                     return
                 }
                 
@@ -221,6 +264,7 @@ public final class TelegramService: ObservableObject {
                     self.userDefaults.set(true, forKey: self.kIsLoggedInKey)
                     self.userDefaults.set(self.currentPhoneNumber, forKey: self.kPhoneNumberKey)
                     self.authState = .authenticated
+                    self.showToast(title: "Вход выполнен", message: "Добро пожаловать в MusicCloud!", iconName: "checkmark.circle.fill")
                     self.syncTracksWithServer(isSilent: false)
                 } else {
                     let errDetail = self.extractErrorDetail(from: data) ?? "Неверный пароль 2FA"
@@ -235,6 +279,7 @@ public final class TelegramService: ObservableObject {
         self.authState = .enterPhoneNumber
         self.tracks = []
         CacheManager.shared.clearAllCache()
+        self.showToast(title: "Выход из аккаунта", message: "Кэш очищен", iconName: "rectangle.portrait.and.arrow.right")
         
         if let url = URL(string: "\(serverURL)/auth/logout") {
             var request = URLRequest(url: url)
@@ -267,12 +312,14 @@ public final class TelegramService: ObservableObject {
             guard let self = self else { return }
             
             if error != nil || (response as? HTTPURLResponse)?.statusCode != 200 {
-                // Сервер недоступен -> тихо открываем оффлайн-кэш без предупреждений
                 let cached = CacheManager.shared.loadCachedTracks()
                 DispatchQueue.main.async {
                     self.tracks = cached
                     self.isOfflineMode = true
                     self.isLoading = false
+                    if !isSilent {
+                        self.showToast(title: "Оффлайн режим", message: "Доступны сохраненные треки (\(cached.count))", iconName: "wifi.slash")
+                    }
                 }
                 return
             }
@@ -281,13 +328,11 @@ public final class TelegramService: ObservableObject {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tracksArray = json["tracks"] as? [[String: Any]] else {
                 DispatchQueue.main.async {
-                    self.tracks = CacheManager.shared.loadCachedTracks()
                     self.isLoading = false
                 }
                 return
             }
             
-            // Парсим список треков с сервера
             var serverTracks: [Track] = []
             for item in tracksArray {
                 let id = String(describing: item["id"] ?? UUID().uuidString)
@@ -295,11 +340,10 @@ public final class TelegramService: ObservableObject {
                 let chatId = (item["chat_id"] as? Int64) ?? Int64(String(describing: item["chat_id"] ?? 0)) ?? 0
                 let title = item["title"] as? String ?? "Без названия"
                 let performer = item["performer"] as? String ?? "Неизвестный исполнитель"
-                let duration = (item["duration"] as? Double) ?? Double(String(describing: item["duration"] ?? 0)) ?? 0
+                let duration = (item["duration"] as? Double) ?? Double(String(describing: item["duration"] ?? 0)) ?? 0.0
                 let fileName = item["file_name"] as? String ?? "audio.mp3"
                 let fileSize = (item["file_size"] as? Int64) ?? Int64(String(describing: item["file_size"] ?? 0)) ?? 0
                 
-                // Проверяем наличие файла в локальном кэше
                 let localURL = CacheManager.shared.cachedAudioURL(for: id)
                 
                 let track = Track(
@@ -318,7 +362,7 @@ public final class TelegramService: ObservableObject {
                 )
                 serverTracks.append(track)
                 
-                // Если файл еще не скачан в кэш — начинаем фоновое скачивание
+                // Начинаем фоновое скачивание в кэш с отслеживанием прогресса
                 if localURL == nil && messageId > 0 {
                     self.downloadAudioToCache(track: track)
                 }
@@ -340,6 +384,9 @@ public final class TelegramService: ObservableObject {
                 self.tracks = serverTracks
                 self.isOfflineMode = false
                 self.isLoading = false
+                if !isSilent {
+                    self.showToast(title: "Синхронизация завершена", message: "Песен в облаке: \(serverTracks.count)", iconName: "arrow.clockwise.circle.fill")
+                }
             }
         }.resume()
     }
@@ -347,17 +394,47 @@ public final class TelegramService: ObservableObject {
     private func downloadAudioToCache(track: Track) {
         guard let downloadURL = URL(string: "\(serverURL)/tracks/\(track.messageId)/audio") else { return }
         
-        URLSession.shared.dataTask(with: downloadURL) { data, _, _ in
-            guard let data = data else { return }
+        DispatchQueue.main.async {
+            self.downloadProgress[track.id] = 0.1
+        }
+        
+        // Симулируем красивый плавный прогресс до завершения ответа
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] t in
+            guard let self = self else { t.invalidate(); return }
+            if let current = self.downloadProgress[track.id], current < 0.85 {
+                self.downloadProgress[track.id] = min(0.85, current + 0.15)
+            }
+        }
+        
+        URLSession.shared.dataTask(with: downloadURL) { [weak self] data, _, _ in
+            timer.invalidate()
+            guard let self = self, let data = data else {
+                DispatchQueue.main.async {
+                    self?.downloadProgress.removeValue(forKey: track.id)
+                }
+                return
+            }
+            
             let ext = (track.fileName as NSString).pathExtension.isEmpty ? "mp3" : (track.fileName as NSString).pathExtension
             if let localURL = CacheManager.shared.saveAudio(data: data, for: track.id, fileExtension: ext) {
-                // Извлекаем встроенную обложку из аудиофайла
                 _ = CacheManager.shared.extractAndSaveArtwork(from: localURL, for: track.id)
                 
                 DispatchQueue.main.async {
+                    self.downloadProgress[track.id] = 1.0
                     if let index = self.tracks.firstIndex(where: { $0.id == track.id }) {
                         self.tracks[index].localFileURL = localURL
                     }
+                    
+                    // Плавно скрываем индикатор прогресса
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        withAnimation {
+                            self.downloadProgress.removeValue(forKey: track.id)
+                        }
+                    }
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.downloadProgress.removeValue(forKey: track.id)
                 }
             }
         }.resume()
@@ -378,12 +455,15 @@ public final class TelegramService: ObservableObject {
     public func deleteTracks(trackIds: Set<String>, completion: (() -> Void)? = nil) {
         guard !trackIds.isEmpty else { return }
         
+        let count = trackIds.count
         let messageIds = self.tracks
             .filter { trackIds.contains($0.id) && $0.messageId > 0 }
             .map { Int($0.messageId) }
         
         CacheManager.shared.removeTracks(trackIds: trackIds)
         self.tracks.removeAll(where: { trackIds.contains($0.id) })
+        
+        self.showToast(title: "Треки удалены", message: "Успешно удалено: \(count)", iconName: "trash.circle.fill")
         
         if !messageIds.isEmpty, let url = URL(string: "\(serverURL)/tracks/delete") {
             var request = URLRequest(url: url)
@@ -408,9 +488,11 @@ public final class TelegramService: ObservableObject {
     ) {
         self.isUploading = true
         self.uploadProgress = 0.1
+        self.showToast(title: "Отправка трека...", message: customTitle ?? sourceURL.lastPathComponent, iconName: "arrow.up.circle.fill")
         
         guard let url = URL(string: "\(serverURL)/tracks/upload") else {
             self.isUploading = false
+            self.showToast(title: "Ошибка", message: "Некорректный адрес сервера", iconName: "exclamationmark.triangle.fill", isError: true)
             completion(.failure(NSError(domain: "MusicCloud", code: -1, userInfo: [NSLocalizedDescriptionKey: "Некорректный адрес сервера"])))
             return
         }
@@ -435,24 +517,22 @@ public final class TelegramService: ObservableObject {
         
         guard let audioData = try? Data(contentsOf: sourceURL) else {
             self.isUploading = false
+            self.showToast(title: "Ошибка", message: "Не удалось прочитать файл", iconName: "exclamationmark.triangle.fill", isError: true)
             completion(.failure(NSError(domain: "MusicCloud", code: -1, userInfo: [NSLocalizedDescriptionKey: "Не удалось прочитать аудиофайл"])))
             return
         }
         
         var body = Data()
-        // File field
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(sourceURL.lastPathComponent)\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: audio/mpeg\r\n\r\n".data(using: .utf8)!)
         body.append(audioData)
         body.append("\r\n".data(using: .utf8)!)
         
-        // Title field
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"title\"\r\n\r\n".data(using: .utf8)!)
         body.append("\(title)\r\n".data(using: .utf8)!)
         
-        // Performer field
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"performer\"\r\n\r\n".data(using: .utf8)!)
         body.append("\(performer)\r\n".data(using: .utf8)!)
@@ -466,12 +546,14 @@ public final class TelegramService: ObservableObject {
                 self.isUploading = false
                 
                 if let error = error {
+                    self.showToast(title: "Ошибка загрузки", message: error.localizedDescription, iconName: "exclamationmark.triangle.fill", isError: true)
                     completion(.failure(error))
                     return
                 }
                 
                 guard let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self.showToast(title: "Ошибка", message: "Неверный ответ сервера", iconName: "exclamationmark.triangle.fill", isError: true)
                     completion(.failure(NSError(domain: "MusicCloud", code: -1, userInfo: [NSLocalizedDescriptionKey: "Ошибка ответа сервера"])))
                     return
                 }
@@ -508,6 +590,7 @@ public final class TelegramService: ObservableObject {
                 self.tracks.insert(newTrack, at: 0)
                 CacheManager.shared.saveTracksMetadata(self.tracks)
                 
+                self.showToast(title: "Трек сохранен в MusicCloud", message: "\(t) — \(p)", iconName: "checkmark.circle.fill")
                 completion(.success(newTrack))
             }
         }.resume()

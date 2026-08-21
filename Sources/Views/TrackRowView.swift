@@ -6,6 +6,7 @@ public struct TrackRowView: View {
     public let isPlayingAudio: Bool
     public let isEditMode: Bool
     public let isSelectedForEdit: Bool
+    public let downloadProgress: Double?
     public let onPlayToggle: () -> Void
     public let onSelect: () -> Void
     public let onLongPress: () -> Void
@@ -17,6 +18,7 @@ public struct TrackRowView: View {
         isPlayingAudio: Bool,
         isEditMode: Bool,
         isSelectedForEdit: Bool,
+        downloadProgress: Double? = nil,
         onPlayToggle: @escaping () -> Void,
         onSelect: @escaping () -> Void,
         onLongPress: @escaping () -> Void,
@@ -27,6 +29,7 @@ public struct TrackRowView: View {
         self.isPlayingAudio = isPlayingAudio
         self.isEditMode = isEditMode
         self.isSelectedForEdit = isSelectedForEdit
+        self.downloadProgress = downloadProgress
         self.onPlayToggle = onPlayToggle
         self.onSelect = onSelect
         self.onLongPress = onLongPress
@@ -51,19 +54,39 @@ public struct TrackRowView: View {
                 .frame(width: 28, height: 28)
                 .transition(.scale.combined(with: .opacity))
             } else {
-                // В обычном режиме: Кнопка Play / Pause с плавной анимацией превращения
-                AnimatedPlayButton(
-                    isPlaying: isPlayingTrack && isPlayingAudio,
-                    size: 42,
-                    iconSize: 15,
-                    foregroundColor: isPlayingTrack ? .white : Color(white: 0.85),
-                    backgroundColor: isPlayingTrack ? Color(white: 0.24) : Color(white: 0.12),
-                    action: onPlayToggle
-                )
-                .transition(.scale.combined(with: .opacity))
+                // В обычном режиме: Кнопка Play / Pause или Круговой прогресс загрузки
+                if let progress = downloadProgress {
+                    ZStack {
+                        Circle()
+                            .stroke(Color.white.opacity(0.15), lineWidth: 2.5)
+                            .frame(width: 42, height: 42)
+                        
+                        Circle()
+                            .trim(from: 0.0, to: CGFloat(min(progress, 1.0)))
+                            .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .frame(width: 42, height: 42)
+                            .animation(.linear(duration: 0.2), value: progress)
+                        
+                        Text("\(Int(progress * 100))%")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white)
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                } else {
+                    AnimatedPlayButton(
+                        isPlaying: isPlayingTrack && isPlayingAudio,
+                        size: 42,
+                        iconSize: 15,
+                        foregroundColor: isPlayingTrack ? .white : Color(white: 0.85),
+                        backgroundColor: isPlayingTrack ? Color(white: 0.24) : Color(white: 0.12),
+                        action: onPlayToggle
+                    )
+                    .transition(.scale.combined(with: .opacity))
+                }
             }
             
-            // Название песни (главным) и имя исполнителя (ниже)
+            // Название песни (главным) и имя исполнителя / статус загрузки
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(track.title)
@@ -76,24 +99,46 @@ public struct TrackRowView: View {
                     }
                 }
                 
-                Text(track.performer)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundColor(Color(white: 0.55))
-                    .lineLimit(1)
+                if let progress = downloadProgress {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color.cyan.opacity(0.9))
+                        
+                        Text("Загрузка • \(Int(progress * 100))%")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Color.cyan.opacity(0.9))
+                    }
+                } else {
+                    Text(track.performer)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundColor(Color(white: 0.55))
+                        .lineLimit(1)
+                }
             }
             
             Spacer()
             
-            // Длительность песни в самом конце бейджика
-            Text(track.formattedDuration)
-                .font(.system(size: 13, weight: .regular, design: .monospaced))
-                .foregroundColor(Color(white: 0.5))
-                .padding(.horizontal, 8)
+            // Длительность песни или индикатор готовности кэша
+            if downloadProgress != nil {
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.6)
+                }
+                .padding(.horizontal, 6)
                 .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color(white: 0.08))
-                )
+            } else {
+                Text(track.formattedDuration)
+                    .font(.system(size: 13, weight: .regular, design: .monospaced))
+                    .foregroundColor(Color(white: 0.5))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color(white: 0.08))
+                    )
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -101,10 +146,10 @@ public struct TrackRowView: View {
             RoundedRectangle(cornerRadius: 16)
                 .fill(
                     isEditMode && isSelectedForEdit
-                        ? Color(white: 0.22) // Выделение при выборе для удаления
+                        ? Color(white: 0.22)
                         : (isPlayingTrack && !isEditMode
-                            ? Color(white: 0.16) // Приглушенный темно-серый для играющего трека
-                            : Color(white: 0.08)) // Глубокий темный для остальных
+                            ? Color(white: 0.16)
+                            : Color(white: 0.08))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 16)
@@ -132,5 +177,6 @@ public struct TrackRowView: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isEditMode)
         .animation(.easeInOut(duration: 0.2), value: isSelectedForEdit)
         .animation(.easeInOut(duration: 0.25), value: isPlayingTrack)
+        .animation(.easeInOut(duration: 0.2), value: downloadProgress != nil)
     }
 }

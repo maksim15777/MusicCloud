@@ -106,7 +106,7 @@ public struct ContentView: View {
                 }
             }
             
-            // Bottom Bar (Mini player OR Delete action bar)
+            // Bottom Bar (Toast Notifications + Mini player OR Delete action bar)
             if isEditMode {
                 editModeBottomBar
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -265,7 +265,7 @@ public struct ContentView: View {
         .background(Color.black.opacity(0.95))
     }
     
-    // MARK: - Track List (Со свайпом сверху вниз Pull-to-Refresh)
+    // MARK: - Track List (Со свайпом сверху вниз Pull-to-Refresh и прогрессом загрузки)
     
     private var trackListView: some View {
         ScrollView(.vertical, showsIndicators: true) {
@@ -277,6 +277,7 @@ public struct ContentView: View {
                         isPlayingAudio: playerManager.isPlaying,
                         isEditMode: isEditMode,
                         isSelectedForEdit: selectedTrackIds.contains(track.id),
+                        downloadProgress: telegramService.downloadProgress[track.id],
                         onPlayToggle: {
                             playerManager.togglePlayPause(for: track, in: filteredTracks)
                         },
@@ -360,23 +361,15 @@ public struct ContentView: View {
         .padding(.horizontal, 30)
     }
     
-    // MARK: - Normal Bottom Bar Overlay (Чистый Mini Player)
+    // MARK: - Normal Bottom Bar Overlay (Красивые уведомления Toast + Mini Player)
     
     private var normalBottomBarOverlay: some View {
         VStack(spacing: 8) {
-            if telegramService.isUploading {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(0.8)
-                    
-                    Text("Загрузка трека в MusicCloud...")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white)
+            // Floating Toast notification message with dismiss cross button
+            if let toast = telegramService.currentToast {
+                ToastBannerView(toast: toast) {
+                    telegramService.dismissToast()
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Capsule().fill(Color(white: 0.20)))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             
@@ -388,6 +381,7 @@ public struct ContentView: View {
                 .padding(.bottom, 16)
             }
         }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: telegramService.currentToast)
         .background(
             LinearGradient(
                 colors: [Color.black.opacity(0), Color.black.opacity(0.95), Color.black],
