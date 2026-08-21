@@ -11,8 +11,8 @@ public final class CacheManager {
     private let metadataFile: URL
     
     private init() {
-        let cacheDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("MusicCloud", isDirectory: true)
+        let baseCacheDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
+        let cacheDir = baseCacheDir.appendingPathComponent("MusicCloud", isDirectory: true)
         
         self.audioDirectory = cacheDir.appendingPathComponent("Audio", isDirectory: true)
         self.artworkDirectory = cacheDir.appendingPathComponent("Artwork", isDirectory: true)
