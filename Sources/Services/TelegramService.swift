@@ -85,7 +85,8 @@ public final class TelegramService: ObservableObject {
     
     public func checkServerAuthStatus() {
         guard let url = URL(string: "\(serverURL)/auth/status") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
+        let request = URLRequest(url: url)
+        URLSession.shared.dataTask(with: request) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             guard let self = self, let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let authorized = json["authorized"] as? Bool,
@@ -309,7 +310,8 @@ public final class TelegramService: ObservableObject {
             return
         }
         
-        URLSession.shared.dataTask(with: url) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
+        let request = URLRequest(url: url)
+        URLSession.shared.dataTask(with: request) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             guard let self = self else { return }
             
             if error != nil || (response as? HTTPURLResponse)?.statusCode != 200 {
@@ -395,13 +397,14 @@ public final class TelegramService: ObservableObject {
     private func downloadAudioToCache(track: Track) {
         guard let downloadURL = URL(string: "\(serverURL)/tracks/\(track.messageId)/audio") else { return }
         let trackId = track.id
-        let fileName = track.fileName
+        let fileExtension = (track.fileName as NSString).pathExtension.isEmpty ? "mp3" : (track.fileName as NSString).pathExtension
         
         DispatchQueue.main.async { [weak self] in
             self?.downloadProgress[trackId] = 0.2
         }
         
-        let task = URLSession.shared.dataTask(with: downloadURL) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
+        let request = URLRequest(url: downloadURL)
+        URLSession.shared.dataTask(with: request) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             guard let data = data, error == nil else {
                 DispatchQueue.main.async {
                     self?.downloadProgress.removeValue(forKey: trackId)
@@ -409,12 +412,14 @@ public final class TelegramService: ObservableObject {
                 return
             }
             
-            let ext = (fileName as NSString).pathExtension.isEmpty ? "mp3" : (fileName as NSString).pathExtension
-            if let localURL = CacheManager.shared.saveAudio(data: data, for: trackId, fileExtension: ext) {
+            let localURL = CacheManager.shared.saveAudio(data: data, for: trackId, fileExtension: fileExtension)
+            if let localURL = localURL {
                 _ = CacheManager.shared.extractAndSaveArtwork(from: localURL, for: trackId)
-                
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
+            }
+            
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if let localURL = localURL {
                     self.downloadProgress[trackId] = 1.0
                     if let index = self.tracks.firstIndex(where: { $0.id == trackId }) {
                         self.tracks[index].localFileURL = localURL
@@ -425,14 +430,11 @@ public final class TelegramService: ObservableObject {
                             self.downloadProgress.removeValue(forKey: trackId)
                         }
                     }
-                }
-            } else {
-                DispatchQueue.main.async {
-                    self?.downloadProgress.removeValue(forKey: trackId)
+                } else {
+                    self.downloadProgress.removeValue(forKey: trackId)
                 }
             }
-        }
-        task.resume()
+        }.resume()
     }
     
     @MainActor
