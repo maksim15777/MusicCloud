@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import SwiftUI
 import AVFoundation
 
 public struct ToastMessage: Identifiable, Equatable {
