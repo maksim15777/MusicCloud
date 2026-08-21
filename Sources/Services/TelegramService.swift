@@ -85,7 +85,7 @@ public final class TelegramService: ObservableObject {
     
     public func checkServerAuthStatus() {
         guard let url = URL(string: "\(serverURL)/auth/status") else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+        URLSession.shared.dataTask(with: url) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             guard let self = self, let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let authorized = json["authorized"] as? Bool,
@@ -132,7 +132,7 @@ public final class TelegramService: ObservableObject {
         let body = ["phone": cleanPhone]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        URLSession.shared.dataTask(with: request) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isLoading = false
@@ -190,7 +190,7 @@ public final class TelegramService: ObservableObject {
         let body = ["phone": self.currentPhoneNumber, "code": cleanCode]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        URLSession.shared.dataTask(with: request) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isLoading = false
@@ -244,7 +244,7 @@ public final class TelegramService: ObservableObject {
         let body = ["password": password]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        URLSession.shared.dataTask(with: request) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isLoading = false
@@ -309,7 +309,7 @@ public final class TelegramService: ObservableObject {
             return
         }
         
-        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+        URLSession.shared.dataTask(with: url) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             guard let self = self else { return }
             
             if error != nil || (response as? HTTPURLResponse)?.statusCode != 200 {
@@ -542,7 +542,7 @@ public final class TelegramService: ObservableObject {
         
         request.httpBody = body
         
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        URLSession.shared.dataTask(with: request) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isUploading = false
