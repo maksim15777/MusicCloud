@@ -407,7 +407,7 @@ public final class TelegramService: ObservableObject {
             }
         }
         
-        URLSession.shared.dataTask(with: downloadURL) { [weak self] data, _, _ in
+        let task = URLSession.shared.dataTask(with: downloadURL) { [weak self] (data: Data?, response: URLResponse?, error: Error?) in
             timer.invalidate()
             guard let self = self, let data = data else {
                 DispatchQueue.main.async {
@@ -438,7 +438,8 @@ public final class TelegramService: ObservableObject {
                     self.downloadProgress.removeValue(forKey: track.id)
                 }
             }
-        }.resume()
+        }
+        task.resume()
     }
     
     @MainActor
